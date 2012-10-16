@@ -55,6 +55,7 @@
   (default-connection my-new-conn)"
   [spec]
   {:pool (delay-pool spec)
+   :spec spec
    :options (conf/extract-options spec)})
 
 (defmacro defdb

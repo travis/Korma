@@ -5,6 +5,14 @@
         [korma.config])
   (:use [clojure.test]))
 
+(defdb other-db (postgres {:db "other" :user "other" :password "otherpass"}))
+(defentity other-email
+  (table :email))
+(defentity other-users
+  (table :users)
+  (database other-db)
+  (has-many other-email))
+
 (defdb test-db-opts (postgres {:db "korma" :user "korma" :password "kormapass" :delimiters "" :naming {:fields string/upper-case}}))
 (defdb test-db (postgres {:db "korma" :user "korma" :password "kormapass"}))
 
@@ -233,7 +241,14 @@
              (select user2
                      (with email
                        (where (like :email "%@gmail.com"))))))
-         "dry run :: SELECT \"users\".* FROM \"users\" :: []\ndry run :: SELECT \"email\".* FROM \"email\" WHERE \"email\".\"email\" LIKE ? AND (\"email\".\"users_id\" = ?) :: [%@gmail.com 1]\n")))
+         "dry run on nil :: SELECT \"users\".* FROM \"users\" :: []\ndry run on nil :: SELECT \"email\".* FROM \"email\" WHERE \"email\".\"email\" LIKE ? AND (\"email\".\"users_id\" = ?) :: [%@gmail.com 1]\n"
+
+         ;;Validate has-many executes the second query on the same database
+         (dry-run
+           (with-out-str
+             (select other-users
+                     (with other-email))))
+         "dry run on other :: SELECT \"users\".* FROM \"users\" :: []\ndry run on other :: SELECT \"email\".* FROM \"email\" WHERE (\"email\".\"users_id\" = ?) :: [1]\n")))
 
 (deftest modifiers
   (sql-only
@@ -280,7 +295,7 @@
                    (select blah (with users))))]
 
     (is (= result
-           "dry run :: SELECT \"blah\".* FROM \"blah\" :: []\ndry run :: SELECT \"users\".* FROM \"users\" WHERE (\"users\".\"cool_id\" = ?) :: [1]\n"))))
+           "dry run on nil :: SELECT \"blah\".* FROM \"blah\" :: []\ndry run on nil :: SELECT \"users\".* FROM \"users\" WHERE (\"users\".\"cool_id\" = ?) :: [1]\n"))))
 
 (deftest subselects
   (are [query result] (= query result)

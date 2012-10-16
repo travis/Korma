@@ -380,7 +380,7 @@
       (= *exec-mode* :sql) sql
       (= *exec-mode* :query) query
       (= *exec-mode* :dry-run) (do
-                                 (println "dry run ::" sql "::" (vec params))
+                                 (println "dry run on" (:db (:spec (:db query))) "::" sql "::" (vec params))
                                  (let [pk (-> query :ent :pk)
                                        results (apply-posts query [{pk 1}])]
                                    (first results)
@@ -589,7 +589,7 @@
     (cond
       (not rel) (throw (Exception. (str "No relationship defined for table: " (:table sub-ent))))
       (#{:has-one :belongs-to} (:rel-type rel)) (with-now rel query sub-ent func)
-      :else (with-later rel query sub-ent func))))
+      :else (with-later rel query (database sub-ent (:db query)) func))))
 
 (defmacro with
   "Add a related entity to the given select query. If the entity has a relationship
