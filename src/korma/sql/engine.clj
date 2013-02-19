@@ -25,10 +25,24 @@
     (str begin (->field s) end)))
 
 ;;*****************************************************
+;; Bindings
+;;*****************************************************
+
+(declare table-alias)
+
+(defmacro bind-query [query & body]
+  `(binding [*bound-table* (if (= :select (:type ~query))
+                             (table-alias ~query)
+                             (:table ~query))
+             *bound-aliases* (or (:aliases ~query) #{})
+             *bound-options* (or (:options ~query) @conf/options)]
+     ~@body))
+
+;;*****************************************************
 ;; Str utils
 ;;*****************************************************
 
-(declare pred-map str-value)
+(declare pred-map str-value ->sql)
 
 (defn str-values [vs]
   (map str-value vs))
@@ -52,7 +66,7 @@
       pred (apply pred args)
       func (let [vs (comma-values args)]
              (format func vs))
-      sub (do
+      sub (let [sub (bind-query sub (->sql sub))]
             (swap! *bound-params* utils/vconcat (:params sub))
             (utils/wrap (:sql-str sub)))
       :else (pred-map v))))
@@ -141,34 +155,25 @@
   (every? #(not (nil? %)) vs))
 
 ;;*****************************************************
-;; Bindings
-;;*****************************************************
-
-(defmacro bind-query [query & body]
-  `(binding [*bound-table* (if (= :select (:type ~query))
-                             (table-alias ~query)
-                             (:table ~query))
-             *bound-aliases* (or (:aliases ~query) #{})
-             *bound-options* (or (:options ~query) @conf/options)]
-     ~@body))
-
-;;*****************************************************
 ;; Predicates
 ;;*****************************************************
 
-(def predicates {'like 'korma.sql.fns/pred-like
-                 'and 'korma.sql.fns/pred-and
-                 'or 'korma.sql.fns/pred-or
-                 'not 'korma.sql.fns/pred-not
-                 'in 'korma.sql.fns/pred-in
-                 'not-in 'korma.sql.fns/pred-not-in
-                 'between 'korma.sql.fns/pred-between
-                 '> 'korma.sql.fns/pred->
-                 '< 'korma.sql.fns/pred-<
-                 '>= 'korma.sql.fns/pred->=
-                 '<= 'korma.sql.fns/pred-<=
-                 'not= 'korma.sql.fns/pred-not=
-                 '= 'korma.sql.fns/pred-=})
+(def raw-predicates {'like 'korma.sql.fns/pred-like
+                     'and 'korma.sql.fns/pred-and
+                     'or 'korma.sql.fns/pred-or
+                     'not 'korma.sql.fns/pred-not
+                     'in 'korma.sql.fns/pred-in
+                     'not-in 'korma.sql.fns/pred-not-in
+                     'between 'korma.sql.fns/pred-between
+                     '> 'korma.sql.fns/pred->
+                     '< 'korma.sql.fns/pred-<
+                     '>= 'korma.sql.fns/pred->=
+                     '<= 'korma.sql.fns/pred-<=
+                     'not= 'korma.sql.fns/pred-not=
+                     '= 'korma.sql.fns/pred-=})
+
+(def predicates (reduce (fn [h [k v]] (assoc h (keyword k) v)) {} raw-predicates))
+
 
 
 (defn do-infix [k op v]
@@ -213,7 +218,7 @@
                        [pred-= v])
         pred? (predicates func)
         func (if pred?
-               (resolve pred?) 
+               (resolve pred?)
                func)]
     (func k value)))
 
@@ -221,7 +226,7 @@
   (if (and (map? m)
            (not (utils/special-map? m)))
     (apply pred-and (doall (map pred-vec m)))
-   m))
+    m))
 
 (defn parse-where [form]
   (if (string? form)
@@ -332,7 +337,7 @@
   (if (empty? (get query where-or-having-kw))
     query
     (let [clauses (map #(if (map? %) (map-val %) %)
-      (get query where-or-having-kw))
+                       (get query where-or-having-kw))
           clauses-str (string/join " AND " clauses)
           neue-sql (str where-or-having-str clauses-str)]
       (if (= "()" clauses-str)
@@ -340,6 +345,15 @@
         (update-in query [:sql-str] str neue-sql)))))
 
 (def sql-where  (partial sql-where-or-having :where  " WHERE "))
+
+#_(defn  sql-where [query]
+  (if-let [clause (:where query)]
+    (let [conditions (.conditions clause)]
+      (if (empty? conditions)
+        query
+        (string/join " AND " (map map-val conditions))))
+    query))
+
 (def sql-having (partial sql-where-or-having :having " HAVING "))
 
 (defn sql-order [query]
@@ -394,7 +408,7 @@
      :union (-> query sql-union sql-order)
      :union-all (-> query sql-union-all sql-order)
      :intersect (-> query sql-intersect sql-order)
-     :select (-> query 
+     :select (-> query
                  sql-select
                  sql-joins
                  sql-where
@@ -402,12 +416,12 @@
                  sql-having
                  sql-order
                  sql-limit-offset)
-     :update (-> query 
+     :update (-> query
                  sql-update
                  sql-set
                  sql-where)
-     :delete (-> query 
+     :delete (-> query
                  sql-delete
                  sql-where)
-     :insert (-> query 
+     :insert (-> query
                  sql-insert))))

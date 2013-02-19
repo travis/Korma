@@ -335,7 +335,19 @@
                    (where {:logins [> 10]})
                    (where {:id [in (subselect users
                                               (where {:age [> 5]}))]})
-                   (where {:email [like "%@gmail.com"]}))))))
+                   (where {:email [like "%@gmail.com"]})))))
+
+  ;; test that delimiters are set at the time the top-level select is called
+  (set-delimiters "#")
+  (defentity five-year-olds
+    (table (subselect users (where {:age 5})) :five_year_olds))
+;;  (pprint (subselect users (where {:age 5})))
+  (is (= "SELECT #five_year_olds#.* FROM (SELECT #users#.* FROM #users# WHERE (#users#.#age# = ?)) #five_year_olds#"
+         (sql-only (select five-year-olds))))
+  (set-delimiters "`")
+  (is (= "SELECT `five_year_olds`.* FROM (SELECT `users`.* FROM `users` WHERE (`users`.`age` = ?)) `five_year_olds`"
+         (sql-only (select five-year-olds))))
+  (set-delimiters "\""))
 
 (deftest select-query-object
   (are [query result] (= query result)
@@ -448,13 +460,13 @@
 (defentity book-with-schema (table :korma.myschema.book))
 (defentity author-with-schema (table :korma.otherschema.author) (belongs-to book-with-schema))
 
-(deftest dbname-on-tablename 
+(deftest dbname-on-tablename
   (are [query result] (= query result)
        (sql-only
          (select author-with-db (with book-with-db)))
          "SELECT \"other\".\"author\".*, \"korma\".\"book\".* FROM \"other\".\"author\" LEFT JOIN \"korma\".\"book\" ON \"korma\".\"book\".\"id\" = \"other\".\"author\".\"book_id\""))
 
-(deftest schemaname-on-tablename 
+(deftest schemaname-on-tablename
   (are [query result] (= query result)
        (sql-only
          (select author-with-schema (with book-with-schema)))
