@@ -4,7 +4,7 @@
    [clojure.test :refer :all]
    [korma
     [config :refer :all] [db :refer :all] [seql :refer :all]
-    [core :refer [defentity database belongs-to has-many has-one table pk]]])
+    [core :refer [database belongs-to has-many has-one table pk]]])
   (:use clojure.test
         korma.config
         korma.seql
@@ -47,50 +47,50 @@
   )
 
 (deftest where-function
-  (is (= "SELECT * FROM \"users\" WHERE (\"users\".\"username\" = ?)"
+  (is (= "SELECT \"users\".* FROM \"users\" WHERE \"users\".\"username\" = ?"
          (as-sql
-          (select "users"
-                  (where :username "chris")))))
-  (is (= "SELECT * FROM \"users\" WHERE (\"users\".\"username\" = ? AND \"users\".\"email\" = ?)"
+          (SELECT "users"
+                  (WHERE :username "chris")))))
+  (is (= "SELECT \"users\".* FROM \"users\" WHERE (\"users\".\"username\" = ? AND \"users\".\"email\" = ?)"
          (as-sql
-          (select "users"
-                  (where :username "chris")
-                  (where :email "chris@example.com"))))))
+          (SELECT "users"
+                  (WHERE :username "chris")
+                  (WHERE :email "chris@example.com"))))))
 
 (deftest select-function
-  (is (= "SELECT \"users\".\"id\", \"users\".\"username\" FROM \"users\" WHERE (\"users\".\"username\" = ?) ORDER BY \"users\".\"created\" ASC LIMIT 5 OFFSET 3"
+  (is (= "SELECT \"users\".\"id\", \"users\".\"username\" FROM \"users\" WHERE \"users\".\"username\" = ? ORDER BY \"users\".\"created\" ASC LIMIT 5 OFFSET 3"
          (as-sql
-          (select "users"
-                  (fields :id :username)
-                  (where :username "chris")
-                  (order :created)
-                  (limit 5)
-                  (offset 3))))))
+          (SELECT "users"
+                  (FIELDS :id :username)
+                  (WHERE :username "chris")
+                  (ORDER :created)
+                  (LIMIT 5)
+                  (OFFSET 3))))))
 
 
 (deftest simple-selects
   (are [query result] (= (as-sql query) result)
-       (select users)
+       (SELECT users)
        "SELECT \"users\".* FROM \"users\""
-       (select users-alias)
+       (SELECT users-alias)
        "SELECT \"u\".* FROM \"users\" \"u\""
-       (select users
-               (fields :id :username))
+       (SELECT users
+               (FIELDS :id :username))
        "SELECT \"users\".\"id\", \"users\".\"username\" FROM \"users\""
-       (select users
-               (where {:username "chris"
-                       :email "hey@hey.com"}))
+       (SELECT users
+               (WHERE :username "chris"
+                      :email "hey@hey.com"))
        "SELECT \"users\".* FROM \"users\" WHERE (\"users\".\"username\" = ? AND \"users\".\"email\" = ?)"
-       (select users
-               (where {:username "chris"})
-               (order :created))
-       "SELECT \"users\".* FROM \"users\" WHERE (\"users\".\"username\" = ?) ORDER BY \"users\".\"created\" ASC"
-       (select users
-               (where {:active true})
-               (order :created)
-               (limit 5)
-               (offset 3))
-       "SELECT \"users\".* FROM \"users\" WHERE (\"users\".\"active\" = TRUE) ORDER BY \"users\".\"created\" ASC LIMIT 5 OFFSET 3"))
+       (SELECT users
+               (WHERE :username "chris")
+               (ORDER :created))
+       "SELECT \"users\".* FROM \"users\" WHERE \"users\".\"username\" = ? ORDER BY \"users\".\"created\" ASC"
+       (SELECT users
+               (WHERE :active true)
+               (ORDER :created)
+               (LIMIT 5)
+               (OFFSET 3))
+       "SELECT \"users\".* FROM \"users\" WHERE \"users\".\"active\" = TRUE ORDER BY \"users\".\"created\" ASC LIMIT 5 OFFSET 3"))
 
 ;; (deftest update-function
 ;;   (is (= "UPDATE \"users\" SET \"first\" = ?, \"last\" = ? WHERE (\"users\".\"id\" = ?)"
@@ -160,41 +160,38 @@
 ;;          "DO 0"
 ;;          (insert users (values [{} {}])))))
 
-;; (deftest complex-where
-;;   (sql-only
-;;     (are [query result] (= query result)
-;;          "SELECT \"users\".* FROM \"users\" WHERE (\"users\".\"name\" = ? OR \"users\".\"name\" = ?)"
-;;          (select users
-;;                  (where (or (= :name "chris")
-;;                             (= :name "john"))))
-;;          "SELECT \"users\".* FROM \"users\" WHERE ((\"users\".\"name\" = ?) OR (\"users\".\"name\" = ?))"
-;;          (select users
-;;                  (where (or {:name "chris"}
-;;                             {:name "john"})))
-;;          "SELECT \"users\".* FROM \"users\" WHERE ((\"users\".\"last\" = ? AND \"users\".\"name\" = ?) OR (\"users\".\"email\" = ?) OR \"users\".\"age\" > ?)"
-;;          (select users
-;;                  (where (or {:name "drew"
-;;                              :last "dreward"}
-;;                             {:email "drew@drew.com"}
-;;                             (> :age 10))))
-;;          "SELECT \"users\".* FROM \"users\" WHERE (\"users\".\"x\" < ? OR (\"users\".\"y\" < ? OR \"users\".\"z\" > ?))"
-;;          (select users
-;;                  (where (or (< :x 5)
-;;                             (or (< :y 3)
-;;                                 (> :z 4)))))
-;;          "SELECT \"users\".* FROM \"users\" WHERE (\"users\".\"name\" LIKE ?)"
-;;          (select users
-;;                  (where {:name [like "chris"]}))
-;;          "SELECT \"users\".* FROM \"users\" WHERE ((\"users\".\"name\" LIKE ?) OR \"users\".\"name\" LIKE ?)"
-;;          (select users
-;;                  (where (or {:name [like "chris"]}
-;;                             (like :name "john")))))))
+(deftest complex-where
+  (are [query result] (= (as-sql query) result)
+       (SELECT users
+               (WHERE (OR {:name "chris"}
+                          {:name "john"})))
+       "SELECT \"users\".* FROM \"users\" WHERE (\"users\".\"name\" = ? OR \"users\".\"name\" = ?)"
 
-;; (deftest where-edge-cases
-;;   (sql-only
-;;    (are [result query] (= result query)
-;;         "SELECT \"users\".* FROM \"users\""
-;;         (select users (where {})))))
+       (SELECT users
+               (WHERE (OR {:name "drew"
+                           :last "dreward"}
+                          {:email "drew@drew.com"}
+                          {:age [:> 10]})))
+       "SELECT \"users\".* FROM \"users\" WHERE ((\"users\".\"last\" = ? AND \"users\".\"name\" = ?) OR \"users\".\"email\" = ? OR \"users\".\"age\" > ?)"
+
+       (SELECT users
+               (WHERE (OR {:x [:< 5]}
+                          (OR {:y [:< 3]}
+                              {:z [:> 4]}))))
+       "SELECT \"users\".* FROM \"users\" WHERE (\"users\".\"x\" < ? OR (\"users\".\"y\" < ? OR \"users\".\"z\" > ?))"
+
+       (SELECT users
+               (WHERE :name [:like "chris"]))
+       "SELECT \"users\".* FROM \"users\" WHERE \"users\".\"name\" LIKE ?"
+
+       (SELECT users
+               (WHERE :name ["travis" "chris"]))
+       "SELECT \"users\".* FROM \"users\" WHERE \"users\".\"name\" IN (?, ?)"
+
+       (SELECT users
+               (WHERE (OR {:name [:like "chris"]}
+                          (LIKE :name "john"))))
+       "SELECT \"users\".* FROM \"users\" WHERE (\"users\".\"name\" LIKE ? OR \"users\".\"name\" LIKE ?)"))
 
 ;; (deftest with-many
 ;;   (with-out-str

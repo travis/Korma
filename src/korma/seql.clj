@@ -3,7 +3,20 @@
   (:require [clojure.string :as str]
             [korma.sql.engine :as eng]))
 
-(defrecord Entity [name])
+(defrecord Entity [table name pk db transforms prepares fields rel])
+
+(defn create-entity
+  "Create an entity representing a table in a database."
+  [table]
+  (map->Entity
+   {:table table
+    :name table
+    :pk :id
+    :db nil
+    :transforms '()
+    :prepares '()
+    :fields []
+    :rel {}}))
 
 (defprotocol ToEntity
   (to-entity [obj]))
@@ -12,11 +25,17 @@
   Entity
   (to-entity [entity] entity)
   String
-  (to-entity [name] (->Entity name {}))
+  (to-entity [name] (create-entity name))
   clojure.lang.Keyword
-  (to-entity [kw] (->Entity (name kw) {})))
+  (to-entity [kw] (create-entity (name kw))))
 
-(defmacro defentity [name & body])
+(defmacro defentity
+  "Define an entity representing a table in the database, applying any modifications in
+  the body."
+  [ent & body]
+  `(let [e# (-> (create-entity ~(name ent))
+                ~@body)]
+     (def ~ent e#)))
 
 (deftype Query [components]
   clojure.lang.Seqable
@@ -25,21 +44,23 @@
 (defprotocol Clause
   (add-to-query [clause query]))
 
-(deftype AndPredicate [pred1 pred2])
+(deftype AndPredicate [predicates])
 
-(deftype OrPredicate [pred1 pred2])
+(deftype OrPredicate [predicates])
 
-(deftype SimplePredicate [operator x y])
+(deftype SimplePredicate [operator field value])
 
-(deftype IsPredicate [field])
+(deftype IsPredicate [field value])
 
-(deftype IsNotPredicate [field])
+(deftype IsNotPredicate [field value])
 
 (deftype InPredicate [field list])
 
 (deftype BetweenPredicate [field min max])
 
 (deftype LikePredicate [field like])
+
+(deftype NotPredicate [predicate])
 
 (deftype FieldsClause [fields]
   Clause
@@ -54,8 +75,8 @@
   (add-to-query [where query]
     (let [components (.components query)]
       (if-let [existing-where (:where components)]
-        (->Query (assoc components :where (WhereClause. (->AndPredicate (.predicate existing-where)
-                                                                        (.predicate where)))))
+        (->Query (assoc components :where (WhereClause. (->AndPredicate [(.predicate existing-where)
+                                                                         (.predicate where)]))))
         (->Query (assoc components :where where))))))
 
 (deftype OrderClause [fields direction]
@@ -76,28 +97,126 @@
   (add-to-query [clause query]
     (->Query (assoc (.components query) :offset clause))))
 
+;;; predicates
+
+(defn =-predicate [field value]
+  (->SimplePredicate "=" field value))
+
+(defn >-predicate [field value]
+  (->SimplePredicate ">" field value))
+
+(defn <-predicate [field value]
+  (->SimplePredicate "<" field value))
+
+(defn >=-predicate [field value]
+  (->SimplePredicate ">=" field value))
+
+(defn <=-predicate [field value]
+  (->SimplePredicate "<=" field value))
+
+(defn not=-predicate [field value]
+  (->NotPredicate (->SimplePredicate "=" field value)))
+
+(defn not-in-predicate [field value]
+  (->NotPredicate (->InPredicate field value)))
+
+(def raw-predicates {'like ->LikePredicate
+                     'not ->IsNotPredicate
+                     'in ->InPredicate
+                     'not-in not-in-predicate
+                     'between ->BetweenPredicate
+                     '> >-predicate
+                     '< <-predicate
+                     '>= >=-predicate
+                     '<= <=-predicate
+                     'not= not=-predicate
+                     '= =-predicate})
+
+(def predicates (reduce (fn [h [k v]] (assoc h (keyword k) v)) raw-predicates raw-predicates))
+
+(def predicate-names (set (keys predicates)))
+
+(defprotocol ParseCondition
+  (parse-condition [condition key]))
+
+(extend-protocol ParseCondition
+  clojure.lang.PersistentVector
+  (parse-condition [condition field]
+    (let [[name & args] condition]
+      (if (predicate-names name)
+        (apply (predicates name) field args)
+        (->InPredicate field condition))))
+  java.lang.Object
+  (parse-condition [condition key] (=-predicate key condition)))
+
+(defn simple-predicate
+  ([key condition] (parse-condition condition key))
+  ([[key condition]] (simple-predicate key condition)))
+
+(defprotocol ToPredicate
+  (to-predicate [object]))
+
+(extend-protocol ToPredicate
+  clojure.lang.APersistentMap
+  (to-predicate [m] (let [preds (map simple-predicate m)]
+                      (if (= (count preds) 1)
+                        (first preds)
+                        (->AndPredicate preds))))
+  AndPredicate
+  (to-predicate [x] x)
+  OrPredicate
+  (to-predicate [x] x)
+  SimplePredicate
+  (to-predicate [x] x)
+  IsPredicate
+  (to-predicate [x] x)
+  IsNotPredicate
+  (to-predicate [x] x)
+  InPredicate
+  (to-predicate [x] x)
+  BetweenPredicate
+  (to-predicate [x] x)
+  LikePredicate
+  (to-predicate [x] x)
+  NotPredicate
+  (to-predicate [x] x))
+
+
 ;;; dsl
 
-(defn select [entity & clauses]
+(defn SELECT [entity & clauses]
   (reduce (fn [query clause] (add-to-query clause query))
           (->Query {:type :select :entity (to-entity entity)}) clauses))
 
-(defn fields [& fields]
+(defn FIELDS [& fields]
   (->FieldsClause fields))
 
-(defn where
+(defn WHERE
   ([predicate] (->WhereClause predicate))
-  ([key val] (where (SimplePredicate. "=" key val))))
+  ([key val & {:as conditions}]
+     (WHERE (to-predicate (assoc conditions key val)))))
 
-(defn order
+(defn ORDER
   ([direction & fields] (->OrderClause fields direction))
-  ([field] (order :asc field)))
+  ([field] (ORDER :asc field)))
 
-(defn limit [limit]
+(defn LIMIT [limit]
   (->LimitClause limit))
 
-(defn offset [offset]
+(defn OFFSET [offset]
   (->OffsetClause offset))
+
+(defn OR [& preds]
+  (->OrPredicate (map to-predicate preds)))
+
+(defn AND [& preds]
+  (->AndPredicate (map to-predicate preds)))
+
+(def LIKE ->LikePredicate)
+
+
+;; Sqlable ;;
+
 
 (defprotocol Sqlable
   (as-sql [sqlable]))
@@ -118,8 +237,10 @@
 (defn sanitize-field [field]
   (apply qualify-field (str/split (name field) #"\.")))
 
+(def desc-variants #{:desc "desc" :DESC "DESC"})
+
 (defn to-order [order]
-  (if (#{:desc "desc" :DESC "DESC"} order) "DESC" "ASC"))
+  (if (desc-variants order) "DESC" "ASC"))
 
 (defn clauses-to-sql [components clause-names]
   (str/join " "
@@ -130,16 +251,15 @@
 (extend-protocol Sqlable
   Entity
   (as-sql [entity]
-    (delimit (.name entity)))
+    (str/join " " (map delimit (remove nil? [(:table entity) (:alias entity)]))))
   Query
   (as-sql [query]
     (let [components (.components query)
           entity (:entity components)
           fields (:fields components)]
-      (prn components)
-      (binding [*table* (.name entity)]
+      (binding [*table* (or (:alias entity) (:table entity))]
         (str "SELECT "
-             (if fields (as-sql fields) "*")
+             (if fields (as-sql fields) (str (delimit (name *table*))".*"))
              " FROM "
              (clauses-to-sql
               components
@@ -150,7 +270,7 @@
     (str (str/join ", " (map as-sql (.fields clause)))))
   WhereClause
   (as-sql [clause]
-    (str "WHERE ("(as-sql (.predicate clause))")"))
+    (str "WHERE "(as-sql (.predicate clause))))
   OrderClause
   (as-sql [clause]
     (str "ORDER BY "(str/join ", " (map as-sql (.fields clause)))" "(to-order (.direction clause))))
@@ -162,28 +282,31 @@
     (str "OFFSET "(.offset clause)))
   AndPredicate
   (as-sql [and-predicate]
-    (str (as-sql (.pred1 and-predicate))" AND "(as-sql (.pred2 and-predicate))))
+    (str "("(str/join " AND " (map as-sql (.predicates and-predicate)))")"))
   OrPredicate
   (as-sql [or-predicate]
-    (str (as-sql (.pred1 or-predicate))" OR "(as-sql (.pred2 or-predicate))))
+    (str "("(str/join " OR " (map as-sql (.predicates or-predicate)))")"))
   SimplePredicate
   (as-sql [predicate]
-    (str (as-sql (.x predicate))" "(name (.operator predicate))" "(as-sql (.y predicate))))
+    (str (as-sql (.field predicate))" "(name (.operator predicate))" "(as-sql (.value predicate))))
   IsPredicate
   (as-sql [predicate]
-    (str (as-sql (.field predicate))" IS NULL"))
+    (str (as-sql (.field predicate))" IS "(as-sql (.value predicate))))
   IsNotPredicate
   (as-sql [predicate]
-    (str (as-sql (.field predicate))" IS NOT NULL"))
+    (str (as-sql (.field predicate))" IS NOT "(as-sql (.value predicate))))
   InPredicate
   (as-sql [predicate]
     (str (as-sql (.field predicate))" IN "(as-sql (.list predicate))))
   BetweenPredicate
   (as-sql [predicate]
-    (str (as-sql (.field predicate))" BETWEEN "(as-sql (.x predicate))" AND "(as-sql (.y predicate))))
+    (str (as-sql (.field predicate))" BETWEEN "(as-sql (.min predicate))" AND "(as-sql (.max predicate))))
   LikePredicate
   (as-sql [predicate]
-    (str (as-sql (.field predicate))" LIKE "(.like predicate)))
+    (str (as-sql (.field predicate))" LIKE "(as-sql (.like predicate))))
+  NotPredicate
+  (as-sql [predicate]
+    (str "NOT "(as-sql predicate)))
   clojure.lang.PersistentVector
   (as-sql [vector] (str "("(str/join ", " (map as-sql vector))")"))
   clojure.lang.Keyword
@@ -191,4 +314,8 @@
   java.lang.Number
   (as-sql [number] "?")
   java.lang.String
-  (as-sql [string] "?"))
+  (as-sql [string] "?")
+  java.lang.Boolean
+  (as-sql [bool] (if bool "TRUE" "FALSE"))
+  nil
+  (as-sql [bool] "NULL"))
