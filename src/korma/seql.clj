@@ -63,6 +63,10 @@
 
 (deftype NotPredicate [predicate])
 
+(deftype AliasedField [field alias])
+
+(deftype SqlFunction [name fields])
+
 (deftype FieldsClause [fields]
   Clause
   (add-to-query [clause query]
@@ -80,6 +84,15 @@
         (->Query (assoc components :where (WhereClause. (->AndPredicate [(.predicate existing-where)
                                                                          (.predicate where)]))))
         (->Query (assoc components :where where))))))
+
+(deftype HavingClause [predicate]
+  Clause
+  (add-to-query [having query]
+    (let [components (.components query)]
+      (if-let [existing-having (:having components)]
+        (->Query (assoc components :having (HavingClause. (->AndPredicate [(.predicate existing-having)
+                                                                         (.predicate having)]))))
+        (->Query (assoc components :having having))))))
 
 (deftype OrderClause [fields direction]
   Clause
@@ -111,11 +124,12 @@
 (deftype AggregateClause [aggregator alias group]
   Clause
   (add-to-query [clause query]
-    (let [components (.components query)
-          existing-clause (:group components)]
-      (if existing-clause
-        (->Query (assoc components :group (GroupClause. (concat (.fields existing-clause) fields))))
-        (->Query (assoc components :group clause))))))
+    (let [aggregated-query (add-to-query
+                            (->FieldsClause [(->AliasedField aggregator alias)])
+                            query)]
+      (if group
+        (add-to-query (->GroupClause [group]) aggregated-query)
+        aggregated-query))))
 
 (deftype JoinsClause [joins]
   Clause
@@ -263,13 +277,33 @@
   (reduce (fn [query clause] (add-to-query clause query))
           (->Query {:type :insert :entity (to-entity entity)}) clauses))
 
+(defprotocol ToField
+  (to-field [object]))
+
+(extend-protocol ToField
+  clojure.lang.PersistentVector
+  (to-field [[field alias]] (->AliasedField field alias))
+  clojure.lang.Keyword
+  (to-field [kw] kw)
+  clojure.lang.Symbol
+  (to-field [sym] sym)
+  AliasedField
+  (to-field [field] field)
+  SqlFunction
+  (to-field [function] function))
+
 (defn FIELDS [& fields]
-  (->FieldsClause fields))
+  (->FieldsClause (map to-field fields)))
 
 (defn WHERE
   ([predicate] (->WhereClause predicate))
   ([key val & conditions]
      (WHERE (to-predicate (concat [[key val]] (partition 2 conditions))))))
+
+(defn HAVING
+  ([predicate] (->HavingClause predicate))
+  ([key val & conditions]
+     (HAVING (to-predicate (concat [[key val]] (partition 2 conditions))))))
 
 (defn ORDER
   ([direction & fields] (->OrderClause fields direction))
@@ -286,6 +320,24 @@
 
 (defn GROUP [& fields]
   (->GroupClause fields))
+
+(defn COUNT [field]
+  (->SqlFunction "COUNT" [field]))
+
+(defn NOW []
+  (->SqlFunction "NOW" []))
+
+(defn MAX [field]
+  (->SqlFunction "MAX" [field]))
+
+(defn SUM [& fields]
+  (->SqlFunction "SUM" fields))
+
+(defn AVG [& fields]
+  (->SqlFunction "AVG" fields))
+
+(defn AGGREGATE [function alias & [group-by]]
+  (->AggregateClause function alias group-by))
 
 (defn JOIN
   ([entity] (WITH entity))
@@ -343,7 +395,7 @@
 (def query-names {:select "SELECT" :update "UPDATE" :delete "DELETE FROM" :insert "INSERT INTO"})
 
 (def query-components
-  {:select [:fields :entity :joins :where :group #_:having :order :limit :offset]
+  {:select [:fields :entity :joins :where :group :having :order :limit :offset]
    :update [:entity :set :where]
    :delete [:entity :where]
    :insert [:entity :values]})
@@ -378,6 +430,9 @@
   WhereClause
   (as-sql [clause]
     (str "WHERE "(as-sql (.predicate clause))))
+  HavingClause
+  (as-sql [clause]
+    (str "HAVING "(as-sql (.predicate clause))))
   OrderClause
   (as-sql [clause]
     (str "ORDER BY "(str/join ", " (map as-sql (.fields clause)))" "(to-order (.direction clause))))
@@ -433,6 +488,10 @@
   NotPredicate
   (as-sql [predicate]
     (str "NOT "(as-sql predicate)))
+  SqlFunction
+  (as-sql [function] (str (.name function)"("(str/join ", " (map as-sql (.fields function)))")"))
+  AliasedField
+  (as-sql [field] (str (as-sql (.field field))" AS "(delimit (name (.alias field)))))
   clojure.lang.PersistentVector
   (as-sql [vector] (str "("(str/join ", " (map as-sql vector))")"))
   clojure.lang.Keyword

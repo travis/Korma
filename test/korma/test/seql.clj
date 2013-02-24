@@ -211,24 +211,23 @@
   (are [result query] (= result (as-sql query))
        "SELECT \"users\".* FROM \"users\" GROUP BY \"users\".\"id\", \"users\".\"name\""
        (SELECT users (GROUP :id :name))
-       ;; "SELECT COUNT(\"users\".*) \"cnt\" FROM \"users\" GROUP BY \"users\".\"id\""
-       ;; (SELECT users (AGGREGATE (count :*) :cnt :id))
-       ;; "SELECT COUNT(\"users\".*) \"cnt\" FROM \"users\" GROUP BY \"users\".\"id\" HAVING (\"users\".\"id\" = ?)"
-       ;; (SELECT users
-       ;;         (AGGREGATE (count :*) :cnt :id)
-       ;;         (HAVING {:id 5}))
-       ))
+       "SELECT COUNT(\"users\".*) AS \"cnt\" FROM \"users\" GROUP BY \"users\".\"id\""
+       (SELECT users (AGGREGATE (COUNT '*) :cnt :id))
+       "SELECT COUNT(\"users\".*) AS \"cnt\" FROM \"users\" GROUP BY \"users\".\"id\" HAVING \"users\".\"id\" = ?"
+       (SELECT users
+               (AGGREGATE (COUNT '*) :cnt :id)
+               (HAVING :id 5))))
 
 (deftest quoting
   (is (= "SELECT \"users\".\"testField\", \"users\".\"t!\" FROM \"users\""
          (as-sql (SELECT users (FIELDS :testField :t!))))))
 
-;; (deftest sqlfns
-;;   (sql-only
-;;     (is (= "SELECT NOW() \"now\", MAX(\"users\".\"blah\"), AVG(SUM(?, ?), SUM(?, ?)) FROM \"users\" WHERE (\"users\".\"time\" >= NOW())"
-;;            (select users
-;;                    (fields [(sqlfn now) :now] (sqlfn max :blah) (sqlfn avg (sqlfn sum 3 4) (sqlfn sum 4 5)))
-;;                    (where {:time [>= (sqlfn now)]}))))))
+(deftest sqlfns
+
+  (is (= "SELECT NOW() AS \"now\", MAX(\"users\".\"blah\"), AVG(SUM(?, ?), SUM(?, ?)) FROM \"users\" WHERE \"users\".\"time\" >= NOW()"
+         (as-sql (SELECT users
+                         (FIELDS [(NOW) :now] (MAX :blah) (AVG (SUM 3 4) (SUM 4 5)))
+                         (WHERE :time [:>= (NOW)]))))))
 
 (deftest join-ent-directly
   (is (= "SELECT \"users\".* FROM \"users\" INNER JOIN \"address\" ON \"users\".\"id\" = \"address\".\"users_id\""
@@ -280,12 +279,6 @@
 ;;         "SELECT TOP 5 \"users\".* FROM \"users\""
 ;;         (select user2 (modifier "TOP 5")))))
 
-;; (deftest delimiters
-;;   (set-delimiters "`")
-;;   (sql-only
-;;     (is (= "SELECT `users`.* FROM `users`"
-;;            (select user2))))
-;;   (set-delimiters "\""))
 
 ;; (deftest naming-delim-options
 ;;   (sql-only
