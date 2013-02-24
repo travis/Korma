@@ -67,98 +67,88 @@
                   (LIMIT 5)
                   (OFFSET 3))))))
 
-
 (deftest simple-selects
-  (are [query result] (= (as-sql query) result)
-       (SELECT users)
+  (are [result query] (= result (as-sql query))
        "SELECT \"users\".* FROM \"users\""
-       (SELECT users-alias)
+       (SELECT users)
        "SELECT \"u\".* FROM \"users\" \"u\""
+       (SELECT users-alias)
+       "SELECT \"users\".\"id\", \"users\".\"username\" FROM \"users\""
        (SELECT users
                (FIELDS :id :username))
-       "SELECT \"users\".\"id\", \"users\".\"username\" FROM \"users\""
+       "SELECT \"users\".* FROM \"users\" WHERE (\"users\".\"username\" = ? AND \"users\".\"email\" = ?)"
        (SELECT users
                (WHERE :username "chris"
                       :email "hey@hey.com"))
-       "SELECT \"users\".* FROM \"users\" WHERE (\"users\".\"username\" = ? AND \"users\".\"email\" = ?)"
+       "SELECT \"users\".* FROM \"users\" WHERE \"users\".\"username\" = ? ORDER BY \"users\".\"created\" ASC"
        (SELECT users
                (WHERE :username "chris")
                (ORDER :created))
-       "SELECT \"users\".* FROM \"users\" WHERE \"users\".\"username\" = ? ORDER BY \"users\".\"created\" ASC"
+       "SELECT \"users\".* FROM \"users\" WHERE \"users\".\"active\" = TRUE ORDER BY \"users\".\"created\" ASC LIMIT 5 OFFSET 3"
        (SELECT users
                (WHERE :active true)
                (ORDER :created)
                (LIMIT 5)
-               (OFFSET 3))
-       "SELECT \"users\".* FROM \"users\" WHERE \"users\".\"active\" = TRUE ORDER BY \"users\".\"created\" ASC LIMIT 5 OFFSET 3"))
+               (OFFSET 3))))
 
-;; (deftest update-function
-;;   (is (= "UPDATE \"users\" SET \"first\" = ?, \"last\" = ? WHERE (\"users\".\"id\" = ?)"
-;;          (-> (update* "users")
-;;              (set-fields {:first "chris"
-;;                           :last "granger"})
-;;              (where {:id 3})
-;;              as-sql))))
+(deftest update-function
+  (is (= "UPDATE \"users\" SET \"first\" = ?, \"last\" = ? WHERE \"users\".\"id\" = ?"
+         (as-sql (UPDATE "users"
+                         (SET :first "chris"
+                              :last "granger")
+                         (WHERE :id 3))))))
+(deftest update-queries
+  (are [result query] (= result (as-sql query))
+       "UPDATE \"users\" SET \"first\" = ?"
+       (UPDATE users
+               (SET :first "chris"))
+       "UPDATE \"users\" SET \"first\" = ? WHERE \"users\".\"id\" = ?"
+       (UPDATE users
+               (SET :first "chris")
+               (WHERE :id 3))
+       "UPDATE \"users\" SET \"first\" = ?, \"last\" = ? WHERE \"users\".\"id\" = ?"
+       (UPDATE users
+               (SET :first "chris"
+                    :last "granger")
+               (WHERE :id 3))))
 
-;; (deftest update-queries
-;;   (sql-only
-;;     (are [result query] (= result query)
-;;          "UPDATE \"users\" SET \"first\" = ?"
-;;          (update users
-;;                  (set-fields {:first "chris"}))
-;;          "UPDATE \"users\" SET \"first\" = ? WHERE (\"users\".\"id\" = ?)"
-;;          (update users
-;;                  (set-fields {:first "chris"})
-;;                  (where {:id 3}))
-;;          "UPDATE \"users\" SET \"first\" = ?, \"last\" = ? WHERE (\"users\".\"id\" = ?)"
-;;          (update users
-;;                  (set-fields {:first "chris"
-;;                               :last "granger"})
-;;                  (where {:id 3})))))
+(deftest delete-function
+  (is (= "DELETE FROM \"users\" WHERE \"users\".\"id\" = ?"
+         (as-sql (DELETE "users"
+                         (WHERE :id 3))))))
 
-;; (deftest delete-function
-;;   (is (= "DELETE FROM \"users\" WHERE (\"users\".\"id\" = ?)"
-;;          (-> (delete* "users")
-;;            (where {:id 3})
-;;            as-sql))))
+(deftest delete-queries
+  (are [result query] (= result (as-sql query))
+       "DELETE FROM \"users\""
+       (DELETE users)
+       "DELETE FROM \"users\" WHERE \"users\".\"id\" = ?"
+       (DELETE users
+               (WHERE :id 3))))
 
-;; (deftest delete-queries
-;;   (sql-only
-;;     (are [result query] (= result query)
-;;          "DELETE FROM \"users\""
-;;          (delete users)
-;;          "DELETE FROM \"users\" WHERE (\"users\".\"id\" = ?)"
-;;          (delete users
-;;                  (where {:id 3})))))
+(deftest insert-function
+  (is (= "INSERT INTO \"users\" (\"last\", \"first\") VALUES (?, ?)"
+         (as-sql (INSERT "users"
+                         (VALUES {:first "chris" :last "granger"})))))
 
-;; (deftest insert-function
-;;   (is (= "INSERT INTO \"users\" (\"last\", \"first\") VALUES (?, ?)"
-;;          (-> (insert* "users")
-;;            (values {:first "chris" :last "granger"})
-;;            as-sql)))
+  (testing "WHEN values is empty THEN generates a NOOP SQL statement"
+    (is (= "DO 0"
+           (as-sql (INSERT "users"
+                           (VALUES {})))))))
 
-;;   (testing "WHEN values is empty THEN generates a NOOP SQL statement"
-;;     (is (= "DO 0"
-;;            (-> (insert* "users")
-;;                (values {})
-;;                as-sql)))))
 
-;; (deftest insert-queries
-;;   (sql-only
-;;     (are [result query] (= result query)
-;;          "INSERT INTO \"users\" (\"last\", \"first\") VALUES (?, ?)"
-;;          (insert users
-;;                  (values {:first "chris" :last "granger"}))
-;;          "INSERT INTO \"users\" (\"last\", \"first\") VALUES (?, ?), (?, ?)"
-;;          (insert users
-;;                  (values [{:first "chris" :last "granger"}
-;;                           {:last "jordan" :first "michael"}]))
-;;          "DO 0"
-;;          (insert users (values {}))
-;;          "DO 0"
-;;          (insert users (values []))
-;;          "DO 0"
-;;          (insert users (values [{} {}])))))
+(deftest insert-queries
+  (are [result query] (= result (as-sql query))
+       "INSERT INTO \"users\" (\"last\", \"first\") VALUES (?, ?)"
+       (INSERT users
+               (VALUES {:first "chris" :last "granger"}))
+       "INSERT INTO \"users\" (\"last\", \"first\") VALUES (?, ?), (?, ?)"
+       (INSERT users
+               (VALUES {:first "chris" :last "granger"}
+                       {:last "jordan" :first "michael"}))
+       "DO 0"
+       (INSERT users (VALUES {}))
+       "DO 0"
+       (INSERT users (VALUES {} {}))))
 
 (deftest complex-where
   (are [query result] (= (as-sql query) result)

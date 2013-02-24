@@ -65,9 +65,10 @@
 (deftype FieldsClause [fields]
   Clause
   (add-to-query [clause query]
-    (let [components (.components query)]
-      (if-let [clause (:fields components)]
-        (->Query (assoc components :fields (FieldsClause. (concat fields (.fields clause)))))
+    (let [components (.components query)
+          existing-clause (:fields components)]
+      (if (and existing-clause (not= ['*] (.fields existing-clause)))
+        (->Query (assoc components :fields (FieldsClause. (concat (.fields existing-clause) fields))))
         (->Query (assoc components :fields clause))))))
 
 (deftype WhereClause [predicate]
@@ -83,8 +84,8 @@
   Clause
   (add-to-query [clause query]
     (let [components (.components query)]
-      (if-let [clause (:order components)]
-        (->Query (assoc components :order (OrderClause. (concat fields (.fields clause)) (.direction clause))))
+      (if-let [existing-clause (:order components)]
+        (->Query (assoc components :order (OrderClause. (concat (.fields existing-clause) fields) (.direction clause))))
         (->Query (assoc components :order clause))))))
 
 (deftype LimitClause [limit]
@@ -96,6 +97,22 @@
   Clause
   (add-to-query [clause query]
     (->Query (assoc (.components query) :offset clause))))
+
+(deftype SetClause [fields]
+  Clause
+  (add-to-query [clause query]
+    (let [components (.components query)]
+      (if-let [existing-clause (:set components)]
+        (->Query (assoc components :set (SetClause. (concat (.fields existing-clause) fields))))
+        (->Query (assoc components :set clause))))))
+
+(deftype ValuesClause [entities]
+  Clause
+  (add-to-query [clause query]
+    (let [components (.components query)]
+      (if-let [existing-clause (:values components)]
+        (->Query (assoc components :values (ValuesClause. (concat (.entities existing-clause) entities))))
+        (->Query (assoc components :values clause))))))
 
 ;;; predicates
 
@@ -157,11 +174,15 @@
   (to-predicate [object]))
 
 (extend-protocol ToPredicate
-  clojure.lang.APersistentMap
-  (to-predicate [m] (let [preds (map simple-predicate m)]
+  ;; List is chosen explicitly because it is an _ordered_ collection,
+  ;; which should make variable substitution logic deterministic
+  java.util.List
+  (to-predicate [l] (let [preds (map simple-predicate l)]
                       (if (= (count preds) 1)
                         (first preds)
                         (->AndPredicate preds))))
+  clojure.lang.APersistentMap
+  (to-predicate [m] (to-predicate (vec m)))
   AndPredicate
   (to-predicate [x] x)
   OrPredicate
@@ -186,15 +207,27 @@
 
 (defn SELECT [entity & clauses]
   (reduce (fn [query clause] (add-to-query clause query))
-          (->Query {:type :select :entity (to-entity entity)}) clauses))
+          (->Query {:type :select :entity (to-entity entity) :fields (->FieldsClause ['*])}) clauses))
+
+(defn UPDATE [entity & clauses]
+  (reduce (fn [query clause] (add-to-query clause query))
+          (->Query {:type :update :entity (to-entity entity)}) clauses))
+
+(defn DELETE [entity & clauses]
+  (reduce (fn [query clause] (add-to-query clause query))
+          (->Query {:type :delete :entity (to-entity entity)}) clauses))
+
+(defn INSERT [entity & clauses]
+  (reduce (fn [query clause] (add-to-query clause query))
+          (->Query {:type :insert :entity (to-entity entity)}) clauses))
 
 (defn FIELDS [& fields]
   (->FieldsClause fields))
 
 (defn WHERE
   ([predicate] (->WhereClause predicate))
-  ([key val & {:as conditions}]
-     (WHERE (to-predicate (assoc conditions key val)))))
+  ([key val & conditions]
+     (WHERE (to-predicate (concat [[key val]] (partition 2 conditions))))))
 
 (defn ORDER
   ([direction & fields] (->OrderClause fields direction))
@@ -205,6 +238,12 @@
 
 (defn OFFSET [offset]
   (->OffsetClause offset))
+
+(defn SET [& fields]
+  (->SetClause (partition 2 fields)))
+
+(defn VALUES [& entities]
+  (->ValuesClause entities))
 
 (defn OR [& preds]
   (->OrPredicate (map to-predicate preds)))
@@ -229,13 +268,13 @@
     (str open value close)))
 
 (defn qualify-field
-  ([table field] (str (delimit table)"."(delimit field)))
+  ([table field] (str (delimit table)"."field))
   ([field] (if *table*
              (qualify-field (name *table*) field)
-             (delimit field))))
+             field)))
 
-(defn sanitize-field [field]
-  (apply qualify-field (str/split (name field) #"\.")))
+(defn split-on-dots [obj]
+  (.split (name obj) "\\."))
 
 (def desc-variants #{:desc "desc" :DESC "DESC"})
 
@@ -248,26 +287,39 @@
                     (map #(if-let [component (components %)] (as-sql component) nil)
                          clause-names))))
 
+(def query-names {:select "SELECT" :update "UPDATE" :delete "DELETE FROM" :insert "INSERT INTO"})
+
+(def query-components
+  {:select [:fields :entity #_:joins :where #_:group #_:having :order :limit :offset]
+   :update [:entity :set :where]
+   :delete [:entity :where]
+   :insert [:entity :values]})
+
+(defn special-case-sql [{:keys [type values]}]
+  (when (= :insert type)
+    (let [non-empty-entities (when (not (nil? values)) (remove empty? (.entities values)))]
+      (when (or (nil? non-empty-entities) (empty? non-empty-entities))
+        "DO 0"))))
+
 (extend-protocol Sqlable
   Entity
   (as-sql [entity]
     (str/join " " (map delimit (remove nil? [(:table entity) (:alias entity)]))))
   Query
   (as-sql [query]
-    (let [components (.components query)
-          entity (:entity components)
-          fields (:fields components)]
-      (binding [*table* (or (:alias entity) (:table entity))]
-        (str "SELECT "
-             (if fields (as-sql fields) (str (delimit (name *table*))".*"))
-             " FROM "
-             (clauses-to-sql
-              components
-              [:entity #_:joins :where #_:group #_:having :order
-               :limit :offset])))))
+    (if-let [special (special-case-sql (or (.components query) {}))]
+      special
+      (let [components (.components query)
+            entity (:entity components)
+            fields (:fields components)]
+        (binding [*table* (or (:alias entity) (:table entity))]
+          (str (query-names (:type components))" "
+               (clauses-to-sql
+                components
+                (query-components (:type components))))))))
   FieldsClause
   (as-sql [clause]
-    (str (str/join ", " (map as-sql (.fields clause)))))
+    (str (str/join ", " (map as-sql (.fields clause)))" FROM"))
   WhereClause
   (as-sql [clause]
     (str "WHERE "(as-sql (.predicate clause))))
@@ -280,6 +332,16 @@
   OffsetClause
   (as-sql [clause]
     (str "OFFSET "(.offset clause)))
+  SetClause
+  (as-sql [clause]
+    (str "SET "(str/join ", " (map (fn [[field value]] (str (delimit (name field))" = "(as-sql value))) (.fields clause)))))
+  ValuesClause
+  (as-sql [clause]
+    (let [entities (.entities clause)
+          fields (distinct (flatten (map keys entities)))]
+      (str "("(str/join ", " (map delimit (map name fields)))") VALUES "
+           (str/join ", " (map (fn [entity] (str "("(str/join ", " (map as-sql (map entity fields)))")"))
+                               entities)))))
   AndPredicate
   (as-sql [and-predicate]
     (str "("(str/join " AND " (map as-sql (.predicates and-predicate)))")"))
@@ -310,7 +372,11 @@
   clojure.lang.PersistentVector
   (as-sql [vector] (str "("(str/join ", " (map as-sql vector))")"))
   clojure.lang.Keyword
-  (as-sql [keyword] (sanitize-field keyword))
+  (as-sql [keyword] (apply qualify-field
+                           (let [parts (split-on-dots keyword)]
+                             (concat (butlast parts) [(delimit (last parts))]))))
+  clojure.lang.Symbol
+  (as-sql [symbol] (apply qualify-field (split-on-dots symbol)))
   java.lang.Number
   (as-sql [number] "?")
   java.lang.String
