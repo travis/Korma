@@ -507,7 +507,7 @@
 (defn- simple-table-name [ent]
   (last (string/split (:table ent) #"\.")))
 
-(defn- default-fk-name [ent]
+(defn default-fk-name [ent]
   (cond
    (map? ent) (keyword (str (simple-table-name ent) "_id"))
    (var? ent) (recur @ent)
@@ -521,8 +521,8 @@
    :join-table join-table})
 
 (defn- get-db-keys [parent child]
-  {:pk (raw (eng/prefix parent (:pk parent)))
-   :fk (raw (eng/prefix child (default-fk-name parent)))})
+  {:pk (:pk parent)
+   :fk (keyword (default-fk-name parent))})
 
 (defn- db-keys-and-foreign-ent [type ent sub-ent opts]
   (case type
@@ -533,7 +533,7 @@
 (defn create-relation [ent sub-ent type opts]
   (let [[db-keys foreign-ent] (db-keys-and-foreign-ent type ent sub-ent opts)
         fk-override (when (:fk opts)
-                      {:fk (raw (eng/prefix foreign-ent (:fk opts)))})]
+                      {:fk (:fk opts)})]
     (merge {:table (:table sub-ent)
             :alias (:alias sub-ent)
             :rel-type type}
@@ -729,6 +729,3 @@
   `(with* ~query ~ent (fn [q#]
                         (-> q#
                             ~@body))))
-
-(-> (select* "users")
-    (where {:username "Chris"}))

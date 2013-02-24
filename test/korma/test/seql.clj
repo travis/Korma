@@ -190,41 +190,38 @@
 ;;              (select user2
 ;;                      (with email)))))))
 
-;; (deftest with-one
-;;   (sql-only
-;;     (is (= "SELECT \"address\".\"state\", \"users\".\"name\" FROM \"users\" LEFT JOIN \"address\" ON \"users\".\"id\" = \"address\".\"users_id\""
-;;            (select user2
-;;                    (with address)
-;;                    (fields :address.state :name))))))
+(deftest with-one
+  (is (= "SELECT \"address\".\"state\", \"users\".\"name\" FROM \"users\" INNER JOIN \"address\" ON \"users\".\"id\" = \"address\".\"users_id\""
+         (as-sql (SELECT user2
+                         (WITH address)
+                         (FIELDS :address.state :name))))))
 
-;; (deftest join-order
-;;   (sql-only
-;;     (is (= "SELECT \"users\".* FROM \"users\" LEFT JOIN \"user2\" ON \"users\".\"id\" = \"user2\".\"users_id\" LEFT JOIN \"user3\" ON \"users\".\"id\" = \"user3\".\"users_id\""
-;;            (select users
-;;                    (join :user2 (= :users.id :user2.users_id))
-;;                    (join :user3 (= :users.id :user3.users_id)))))))
+(deftest join
+  (are [result query] (= result (as-sql query))
+       "SELECT \"blah\".* FROM \"blah\" INNER JOIN \"cool\" ON \"cool\".\"id\" = \"blah\".\"id\""
+       (SELECT :blah (JOIN :cool :cool.id :blah.id))
 
-;; (deftest join-with-map
-;;   (sql-only
-;;     (are [result query] (= result query)
-;;          "SELECT \"blah\".* FROM \"blah\" LEFT JOIN \"cool\" ON (\"cool\".\"id\" = \"blah\".\"id\")"
-;;          (select :blah (join :cool {:cool.id :blah.id})))))
+       "SELECT \"users\".* FROM \"users\" INNER JOIN \"user2\" ON \"users\".\"id\" = \"user2\".\"users_id\" INNER JOIN \"user3\" ON \"users\".\"id\" = \"user3\".\"users_id\""
+       (SELECT users
+               (JOIN :user2 :users.id :user2.users_id)
+               (JOIN :user3 :users.id :user3.users_id))))
 
-;; (deftest aggregate-group
-;;   (sql-only
-;;     (is (= "SELECT \"users\".* FROM \"users\" GROUP BY \"users\".\"id\", \"users\".\"name\""
-;;            (select users (group :id :name))))
-;;     (is (= "SELECT COUNT(\"users\".*) \"cnt\" FROM \"users\" GROUP BY \"users\".\"id\""
-;;            (select users (aggregate (count :*) :cnt :id))))
-;;     (is (= "SELECT COUNT(\"users\".*) \"cnt\" FROM \"users\" GROUP BY \"users\".\"id\" HAVING (\"users\".\"id\" = ?)"
-;;             (select users
-;;                    (aggregate (count :*) :cnt :id)
-;;                    (having {:id 5}))))))
 
-;; (deftest quoting
-;;   (sql-only
-;;     (is (= "SELECT \"users\".\"testField\", \"users\".\"t!\" FROM \"users\""
-;;            (select users (fields :testField :t!))))))
+(deftest aggregate-group
+  (are [result query] (= result (as-sql query))
+       "SELECT \"users\".* FROM \"users\" GROUP BY \"users\".\"id\", \"users\".\"name\""
+       (SELECT users (GROUP :id :name))
+       ;; "SELECT COUNT(\"users\".*) \"cnt\" FROM \"users\" GROUP BY \"users\".\"id\""
+       ;; (SELECT users (AGGREGATE (count :*) :cnt :id))
+       ;; "SELECT COUNT(\"users\".*) \"cnt\" FROM \"users\" GROUP BY \"users\".\"id\" HAVING (\"users\".\"id\" = ?)"
+       ;; (SELECT users
+       ;;         (AGGREGATE (count :*) :cnt :id)
+       ;;         (HAVING {:id 5}))
+       ))
+
+(deftest quoting
+  (is (= "SELECT \"users\".\"testField\", \"users\".\"t!\" FROM \"users\""
+         (as-sql (SELECT users (FIELDS :testField :t!))))))
 
 ;; (deftest sqlfns
 ;;   (sql-only
@@ -233,11 +230,10 @@
 ;;                    (fields [(sqlfn now) :now] (sqlfn max :blah) (sqlfn avg (sqlfn sum 3 4) (sqlfn sum 4 5)))
 ;;                    (where {:time [>= (sqlfn now)]}))))))
 
-;; (deftest join-ent-directly
-;;   (sql-only
-;;     (is (= "SELECT \"users\".* FROM \"users\" LEFT JOIN \"address\" ON \"users\".\"id\" = \"address\".\"users_id\""
-;;            (select user2
-;;                    (join address))))))
+(deftest join-ent-directly
+  (is (= "SELECT \"users\".* FROM \"users\" INNER JOIN \"address\" ON \"users\".\"id\" = \"address\".\"users_id\""
+         (as-sql (SELECT user2
+                         (JOIN address))))))
 
 ;; (deftest new-with
 ;;   (sql-only

@@ -1,7 +1,8 @@
 (ns korma.seql
   "A new syntax for writing SQL in Korma"
   (:require [clojure.string :as str]
-            [korma.sql.engine :as eng]))
+            [korma.sql.engine :as eng]
+            [korma.core :refer [default-fk-name]]))
 
 (defrecord Entity [table name pk db transforms prepares fields rel])
 
@@ -97,6 +98,47 @@
   Clause
   (add-to-query [clause query]
     (->Query (assoc (.components query) :offset clause))))
+
+(deftype GroupClause [fields]
+  Clause
+  (add-to-query [clause query]
+    (let [components (.components query)
+          existing-clause (:group components)]
+      (if existing-clause
+        (->Query (assoc components :group (GroupClause. (concat (.fields existing-clause) fields))))
+        (->Query (assoc components :group clause))))))
+
+(deftype AggregateClause [aggregator alias group]
+  Clause
+  (add-to-query [clause query]
+    (let [components (.components query)
+          existing-clause (:group components)]
+      (if existing-clause
+        (->Query (assoc components :group (GroupClause. (concat (.fields existing-clause) fields))))
+        (->Query (assoc components :group clause))))))
+
+(deftype JoinsClause [joins]
+  Clause
+  (add-to-query [clause query]
+    (let [components (.components query)]
+      (if-let [existing-clause (:joins components)]
+        (->Query (assoc components :joins (JoinsClause. (concat (.joins existing-clause) (.joins clause)))))
+        (->Query (assoc components :joins clause))))))
+
+(defn qualify-key [entity key]
+  (keyword (str (name (or (:alias entity) (:table entity)))"."(name key))))
+
+(deftype WithClause [with]
+  Clause
+  (add-to-query [clause query]
+    (let [components (.components query)]
+     (if-let [entity (:entity components)]
+       (if-let [rel (get (:rel entity) (:table with))]
+         (add-to-query (->JoinsClause [{:type :inner :entity with
+                                        :field-a (qualify-key entity (:pk @rel))
+                                        :field-b (qualify-key with (:fk @rel))}]) query)
+         (throw (Exception. (str "No relationship defined between "(:table entity)" and "(:table with)))))
+       (throw (Exception. "Can not use WITH without an Entity"))))))
 
 (deftype SetClause [fields]
   Clause
@@ -239,6 +281,17 @@
 (defn OFFSET [offset]
   (->OffsetClause offset))
 
+(defn WITH [entity]
+  (->WithClause (to-entity entity)))
+
+(defn GROUP [& fields]
+  (->GroupClause fields))
+
+(defn JOIN
+  ([entity] (WITH entity))
+  ([entity field-a field-b]
+     (->JoinsClause [{:type :inner :entity (to-entity entity) :field-a field-a :field-b field-b}])))
+
 (defn SET [& fields]
   (->SetClause (partition 2 fields)))
 
@@ -290,10 +343,12 @@
 (def query-names {:select "SELECT" :update "UPDATE" :delete "DELETE FROM" :insert "INSERT INTO"})
 
 (def query-components
-  {:select [:fields :entity #_:joins :where #_:group #_:having :order :limit :offset]
+  {:select [:fields :entity :joins :where :group #_:having :order :limit :offset]
    :update [:entity :set :where]
    :delete [:entity :where]
    :insert [:entity :values]})
+
+(def join-names {:inner "INNER JOIN"})
 
 (defn special-case-sql [{:keys [type values]}]
   (when (= :insert type)
@@ -332,6 +387,15 @@
   OffsetClause
   (as-sql [clause]
     (str "OFFSET "(.offset clause)))
+  GroupClause
+  (as-sql [clause]
+    (str "GROUP BY "(str/join ", " (map as-sql (.fields clause)))))
+  JoinsClause
+  (as-sql [clause]
+    (str/join " "
+              (map
+               (fn [join] (str (join-names (:type join))" "(as-sql (:entity join))" ON "(as-sql (:field-a join))" = "(as-sql (:field-b join))))
+               (.joins clause))))
   SetClause
   (as-sql [clause]
     (str "SET "(str/join ", " (map (fn [[field value]] (str (delimit (name field))" = "(as-sql value))) (.fields clause)))))
