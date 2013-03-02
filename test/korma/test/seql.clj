@@ -234,39 +234,39 @@
          (as-sql (SELECT user2
                          (JOIN address))))))
 
-;; (deftest new-with
-;;   (sql-only
-;;     (are [result query] (= result query)
+(deftest new-with
+  (are [result query] (= result (as-sql query))
 
-;;          "SELECT \"users\".*, \"address\".\"id\" FROM \"users\" LEFT JOIN \"address\" ON \"users\".\"id\" = \"address\".\"users_id\""
-;;          (select user2
-;;                  (fields :*)
-;;                  (with address (fields :id)))
+       "SELECT \"users\".*, \"address\".\"id\" FROM \"users\" INNER JOIN \"address\" ON \"users\".\"id\" = \"address\".\"users_id\""
+       (SELECT user2
+               (FIELDS '*)
+               (WITH address (FIELDS :id)))
 
-;;          "SELECT \"users\".*, \"address\".*, \"state\".* FROM \"users\" LEFT JOIN \"address\" ON \"users\".\"id\" = \"address\".\"users_id\" LEFT JOIN \"state\" ON \"state\".\"id\" = \"address\".\"state_id\" WHERE (\"state\".\"state\" = ?) AND (\"address\".\"id\" > ?)"
-;;          (select user2
-;;                  (fields :*)
-;;                  (with address
-;;                    (with state (where {:state "nc"}))
-;;                    (where {:id [> 5]})))
+       ;; "SELECT \"users\".*, \"address\".*, \"state\".* FROM \"users\" LEFT JOIN \"address\" ON \"users\".\"id\" = \"address\".\"users_id\" LEFT JOIN \"state\" ON \"state\".\"id\" = \"address\".\"state_id\" WHERE (\"state\".\"state\" = ?) AND (\"address\".\"id\" > ?)"
+       ;; (select user2
+       ;;         (fields :*)
+       ;;         (with address
+       ;;           (with state (where {:state "nc"}))
+       ;;           (where {:id [> 5]})))
 
-;;          ;;Ensure that params are still ordered correctly
-;;          ["nc" 5]
-;;          (query-only
-;;            (:params
-;;              (select user2
-;;                      (fields :*)
-;;                      (with address
-;;                        (with state (where {:state "nc"}))
-;;                        (where (> :id 5))))))
+       ;; ;;Ensure that params are still ordered correctly
+       ;; ["nc" 5]
+       ;; (query-only
+       ;;   (:params
+       ;;     (select user2
+       ;;             (fields :*)
+       ;;             (with address
+       ;;               (with state (where {:state "nc"}))
+       ;;               (where (> :id 5))))))
 
-;;          ;;Validate has-many executes the second query
-;;          "dry run :: SELECT \"users\".* FROM \"users\" :: []\ndry run :: SELECT \"email\".* FROM \"email\" WHERE \"email\".\"email\" LIKE ? AND (\"email\".\"users_id\" = ?) :: [%@gmail.com 1]\n"
-;;          (dry-run
-;;            (with-out-str
-;;              (select user2
-;;                      (with email
-;;                        (where (like :email "%@gmail.com")))))))))
+       ;; ;;Validate has-many executes the second query
+       ;; "dry run :: SELECT \"users\".* FROM \"users\" :: []\ndry run :: SELECT \"email\".* FROM \"email\" WHERE \"email\".\"email\" LIKE ? AND (\"email\".\"users_id\" = ?) :: [%@gmail.com 1]\n"
+       ;; (dry-run
+       ;;   (with-out-str
+       ;;     (select user2
+       ;;             (with email
+       ;;                   (where (like :email "%@gmail.com"))))))
+       ))
 
 ;; (deftest modifiers
 ;;   (sql-only

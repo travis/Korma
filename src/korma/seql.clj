@@ -45,38 +45,62 @@
 (defprotocol Clause
   (add-to-query [clause query]))
 
-(deftype AndPredicate [predicates])
+(defrecord AndPredicate [predicates])
 
-(deftype OrPredicate [predicates])
+(defrecord OrPredicate [predicates])
 
-(deftype SimplePredicate [operator field value])
+(defrecord SimplePredicate [operator field value])
 
-(deftype IsPredicate [field value])
+(defrecord IsPredicate [field value])
 
-(deftype IsNotPredicate [field value])
+(defrecord IsNotPredicate [field value])
 
-(deftype InPredicate [field list])
+(defrecord InPredicate [field list])
 
-(deftype BetweenPredicate [field min max])
+(defrecord BetweenPredicate [field min max])
 
-(deftype LikePredicate [field like])
+(defrecord LikePredicate [field like])
 
-(deftype NotPredicate [predicate])
+(defrecord NotPredicate [predicate])
 
-(deftype AliasedField [field alias])
+(defrecord SqlFunction [name fields])
 
-(deftype SqlFunction [name fields])
+(defrecord Field [name alias entity])
 
-(deftype FieldsClause [fields]
+(defn field [name & {:as options}]
+  (map->Field (assoc options :name name)))
+
+(defprotocol ToField
+  (to-field [object entity]))
+
+(extend-protocol ToField
+  clojure.lang.PersistentVector
+  (to-field [[name alias] entity] (field name :alias alias :entity entity))
+  clojure.lang.Keyword
+  (to-field [kw entity] (field kw :entity entity))
+  clojure.lang.Symbol
+  (to-field [sym entity] (field sym :entity entity))
+  Field
+  (to-field [field entity] (assoc field :entity entity))
+  SqlFunction
+  (to-field [function entity] function))
+
+
+
+(defn merge-fields [existing-clause new-clause]
+  (concat (:fields existing-clause)
+          (map #(to-field % (:entity new-clause)) (:fields new-clause))))
+
+(defrecord FieldsClause [fields]
   Clause
   (add-to-query [clause query]
     (let [components (.components query)
           existing-clause (:fields components)]
-      (if (and existing-clause (not= ['*] (.fields existing-clause)))
-        (->Query (assoc components :fields (FieldsClause. (concat (.fields existing-clause) fields))))
+      (if (and existing-clause (.fields existing-clause))
+        (->Query (assoc components :fields (FieldsClause. (merge-fields existing-clause clause))))
         (->Query (assoc components :fields clause))))))
 
-(deftype WhereClause [predicate]
+(defrecord WhereClause [predicate]
   Clause
   (add-to-query [where query]
     (let [components (.components query)]
@@ -85,7 +109,7 @@
                                                                          (.predicate where)]))))
         (->Query (assoc components :where where))))))
 
-(deftype HavingClause [predicate]
+(defrecord HavingClause [predicate]
   Clause
   (add-to-query [having query]
     (let [components (.components query)]
@@ -94,44 +118,45 @@
                                                                          (.predicate having)]))))
         (->Query (assoc components :having having))))))
 
-(deftype OrderClause [fields direction]
+(defrecord OrderClause [fields direction]
   Clause
   (add-to-query [clause query]
     (let [components (.components query)]
       (if-let [existing-clause (:order components)]
-        (->Query (assoc components :order (OrderClause. (concat (.fields existing-clause) fields) (.direction clause))))
+        (->Query (assoc components :order (OrderClause. (merge-fields existing-clause clause)
+                                                        (.direction clause))))
         (->Query (assoc components :order clause))))))
 
-(deftype LimitClause [limit]
+(defrecord LimitClause [limit]
   Clause
   (add-to-query [clause query]
     (->Query (assoc (.components query) :limit clause))))
 
-(deftype OffsetClause [offset]
+(defrecord OffsetClause [offset]
   Clause
   (add-to-query [clause query]
     (->Query (assoc (.components query) :offset clause))))
 
-(deftype GroupClause [fields]
+(defrecord GroupClause [fields]
   Clause
   (add-to-query [clause query]
     (let [components (.components query)
           existing-clause (:group components)]
       (if existing-clause
-        (->Query (assoc components :group (GroupClause. (concat (.fields existing-clause) fields))))
+        (->Query (assoc components :group (GroupClause. (merge-fields existing-clause clause))))
         (->Query (assoc components :group clause))))))
 
-(deftype AggregateClause [aggregator alias group]
+(defrecord AggregateClause [aggregator alias group]
   Clause
   (add-to-query [clause query]
     (let [aggregated-query (add-to-query
-                            (->FieldsClause [(->AliasedField aggregator alias)])
+                            (->FieldsClause [(field aggregator :alias alias)])
                             query)]
       (if group
         (add-to-query (->GroupClause [group]) aggregated-query)
         aggregated-query))))
 
-(deftype JoinsClause [joins]
+(defrecord JoinsClause [joins]
   Clause
   (add-to-query [clause query]
     (let [components (.components query)]
@@ -142,19 +167,23 @@
 (defn qualify-key [entity key]
   (keyword (str (name (or (:alias entity) (:table entity)))"."(name key))))
 
-(deftype WithClause [with]
+(defrecord WithClause [with-entity clauses]
   Clause
   (add-to-query [clause query]
     (let [components (.components query)]
      (if-let [entity (:entity components)]
-       (if-let [rel (get (:rel entity) (:table with))]
-         (add-to-query (->JoinsClause [{:type :inner :entity with
-                                        :field-a (qualify-key entity (:pk @rel))
-                                        :field-b (qualify-key with (:fk @rel))}]) query)
-         (throw (Exception. (str "No relationship defined between "(:table entity)" and "(:table with)))))
+       (if-let [rel (get (:rel entity) (:table with-entity))]
+         (let [joined-query
+               (add-to-query (->JoinsClause [{:type :inner :entity with-entity
+                                              :field-a (qualify-key entity (:pk @rel))
+                                              :field-b (qualify-key with-entity (:fk @rel))}]) query)]
+           (reduce (fn [q c] (add-to-query (assoc c :entity with-entity) q)) joined-query clauses))
+
+
+         (throw (Exception. (str "No relationship defined between "(:table entity)" and "(:table with-entity)))))
        (throw (Exception. "Can not use WITH without an Entity"))))))
 
-(deftype SetClause [fields]
+(defrecord SetClause [fields]
   Clause
   (add-to-query [clause query]
     (let [components (.components query)]
@@ -162,7 +191,7 @@
         (->Query (assoc components :set (SetClause. (concat (.fields existing-clause) fields))))
         (->Query (assoc components :set clause))))))
 
-(deftype ValuesClause [entities]
+(defrecord ValuesClause [entities]
   Clause
   (add-to-query [clause query]
     (let [components (.components query)]
@@ -263,7 +292,7 @@
 
 (defn SELECT [entity & clauses]
   (reduce (fn [query clause] (add-to-query clause query))
-          (->Query {:type :select :entity (to-entity entity) :fields (->FieldsClause ['*])}) clauses))
+          (->Query {:type :select :entity (to-entity entity) :fields (->FieldsClause nil)}) clauses))
 
 (defn UPDATE [entity & clauses]
   (reduce (fn [query clause] (add-to-query clause query))
@@ -277,23 +306,8 @@
   (reduce (fn [query clause] (add-to-query clause query))
           (->Query {:type :insert :entity (to-entity entity)}) clauses))
 
-(defprotocol ToField
-  (to-field [object]))
-
-(extend-protocol ToField
-  clojure.lang.PersistentVector
-  (to-field [[field alias]] (->AliasedField field alias))
-  clojure.lang.Keyword
-  (to-field [kw] kw)
-  clojure.lang.Symbol
-  (to-field [sym] sym)
-  AliasedField
-  (to-field [field] field)
-  SqlFunction
-  (to-field [function] function))
-
 (defn FIELDS [& fields]
-  (->FieldsClause (map to-field fields)))
+  (->FieldsClause (map #(to-field % nil) fields)))
 
 (defn WHERE
   ([predicate] (->WhereClause predicate))
@@ -315,8 +329,8 @@
 (defn OFFSET [offset]
   (->OffsetClause offset))
 
-(defn WITH [entity]
-  (->WithClause (to-entity entity)))
+(defn WITH [entity & clauses]
+  (->WithClause (to-entity entity) clauses))
 
 (defn GROUP [& fields]
   (->GroupClause fields))
@@ -408,6 +422,12 @@
       (when (or (nil? non-empty-entities) (empty? non-empty-entities))
         "DO 0"))))
 
+(defmacro with-entity-context [object & body]
+  `(if-let [entity# (:entity ~object)]
+     (binding [*table* (or (:alias entity#) (:table entity#))]
+       ~@body)
+     (do ~@body)))
+
 (extend-protocol Sqlable
   Entity
   (as-sql [entity]
@@ -417,25 +437,32 @@
     (if-let [special (special-case-sql (or (.components query) {}))]
       special
       (let [components (.components query)
-            entity (:entity components)
             fields (:fields components)]
-        (binding [*table* (or (:alias entity) (:table entity))]
+        (with-entity-context components
           (str (query-names (:type components))" "
                (clauses-to-sql
                 components
                 (query-components (:type components))))))))
   FieldsClause
   (as-sql [clause]
-    (str (str/join ", " (map as-sql (.fields clause)))" FROM"))
+    (with-entity-context clause
+      (str
+       (if (.fields clause)
+         (str/join ", " (map as-sql (.fields clause)))
+         (as-sql '*))
+       " FROM")))
   WhereClause
   (as-sql [clause]
-    (str "WHERE "(as-sql (.predicate clause))))
+    (with-entity-context clause
+     (str "WHERE "(as-sql (.predicate clause)))))
   HavingClause
   (as-sql [clause]
-    (str "HAVING "(as-sql (.predicate clause))))
+    (with-entity-context clause
+     (str "HAVING "(as-sql (.predicate clause)))))
   OrderClause
   (as-sql [clause]
-    (str "ORDER BY "(str/join ", " (map as-sql (.fields clause)))" "(to-order (.direction clause))))
+    (with-entity-context clause
+     (str "ORDER BY "(str/join ", " (map as-sql (.fields clause)))" "(to-order (.direction clause)))))
   LimitClause
   (as-sql [clause]
     (str "LIMIT "(.limit clause)))
@@ -444,13 +471,15 @@
     (str "OFFSET "(.offset clause)))
   GroupClause
   (as-sql [clause]
-    (str "GROUP BY "(str/join ", " (map as-sql (.fields clause)))))
+    (with-entity-context clause
+     (str "GROUP BY "(str/join ", " (map as-sql (.fields clause))))))
   JoinsClause
   (as-sql [clause]
-    (str/join " "
-              (map
-               (fn [join] (str (join-names (:type join))" "(as-sql (:entity join))" ON "(as-sql (:field-a join))" = "(as-sql (:field-b join))))
-               (.joins clause))))
+    (with-entity-context clause
+     (str/join " "
+               (map
+                (fn [join] (str (join-names (:type join))" "(as-sql (:entity join))" ON "(as-sql (:field-a join))" = "(as-sql (:field-b join))))
+                (.joins clause)))))
   SetClause
   (as-sql [clause]
     (str "SET "(str/join ", " (map (fn [[field value]] (str (delimit (name field))" = "(as-sql value))) (.fields clause)))))
@@ -490,8 +519,10 @@
     (str "NOT "(as-sql predicate)))
   SqlFunction
   (as-sql [function] (str (.name function)"("(str/join ", " (map as-sql (.fields function)))")"))
-  AliasedField
-  (as-sql [field] (str (as-sql (.field field))" AS "(delimit (name (.alias field)))))
+  Field
+  (as-sql [field]
+    (with-entity-context field
+     (str (as-sql (.name field)) (when (.alias field) (str " AS "(delimit (name (.alias field))))))))
   clojure.lang.PersistentVector
   (as-sql [vector] (str "("(str/join ", " (map as-sql vector))")"))
   clojure.lang.Keyword
