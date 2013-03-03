@@ -228,7 +228,7 @@
                          (FIELDS [(NOW) :now] (MAX :blah) (AVG (SUM 3 4) (SUM 4 5)))
                          (WHERE :time [:>= (NOW)]))))))
 
-(deftest join-ent-directly
+#_(deftest join-ent-directly
   (is (= "SELECT \"users\".* FROM \"users\" INNER JOIN \"address\" ON \"users\".\"id\" = \"address\".\"users_id\""
          (as-sql (SELECT user2
                          (JOIN address))))))

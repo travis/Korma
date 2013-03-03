@@ -74,6 +74,9 @@
   ([entity-name field-name] (field field-name :entity {:table entity-name}))
   ([field-name] (field field-name)))
 
+(defn split-on-dots [obj]
+  (.split (name obj) "\\."))
+
 (defn- nameable-to-field [nameable entity]
   (let [field (apply strings-to-field (split-on-dots nameable))]
     (if entity (assoc field :entity entity) field)))
@@ -95,7 +98,7 @@
 
 (defn merge-fields [existing-clause new-clause]
   (concat (:fields existing-clause)
-          (map #(to-field % (:entity new-clause)) (:fields new-clause))))
+          (map #(to-field % (or (:entity %) (:entity new-clause))) (:fields new-clause))))
 
 (defrecord FieldsClause [fields]
   Clause
@@ -173,19 +176,23 @@
 (defn qualify-key [entity key]
   (keyword (str (name (or (:alias entity) (:table entity)))"."(name key))))
 
+(defn add-all-to-query [clauses query]
+  (reduce (fn [q c] (add-to-query c q)) query clauses))
+
 (defrecord WithClause [with-entity clauses]
   Clause
   (add-to-query [clause query]
     (let [components (.components query)]
      (if-let [entity (:entity components)]
        (if-let [rel (get (:rel entity) (:table with-entity))]
-         (let [joined-query
-               (add-to-query (->JoinsClause [{:type :inner :entity with-entity
-                                              :field-a (qualify-key entity (:pk @rel))
-                                              :field-b (qualify-key with-entity (:fk @rel))}]) query)]
-           (reduce (fn [q c] (add-to-query (assoc c :entity with-entity) q)) joined-query clauses))
-
-
+         (add-all-to-query
+          (concat
+           [(->JoinsClause [{:type :inner :entity with-entity
+                             :field-a (qualify-key entity (:pk @rel))
+                             :field-b (qualify-key with-entity (:fk @rel))}])
+            (->FieldsClause [(field "*" :entity with-entity)])]
+           (map #(assoc % :entity with-entity) clauses))
+          query)
          (throw (Exception. (str "No relationship defined between "(:table entity)" and "(:table with-entity)))))
        (throw (Exception. "Can not use WITH without an Entity"))))))
 
@@ -398,9 +405,6 @@
              (qualify-field (name *table*) field)
              field)))
 
-(defn split-on-dots [obj]
-  (.split (name obj) "\\."))
-
 (def desc-variants #{:desc "desc" :DESC "DESC"})
 
 (defn to-order [order]
@@ -437,6 +441,23 @@
 (defn alias-as-sql [alias]
   (when alias (str " AS "(delimit (name alias)))))
 
+(defn normalize-field-table [field]
+  (to-field field (or (:entity field) {:table *table*})))
+
+(defn explicit-field-tables [fields]
+  (set (map #(name (:table (:entity %)))
+            (filter :entity
+                    (remove #(= "*" (name (:name %))) fields)))))
+
+(defn remove-extra-star-fields [fields]
+  (let [tables-with-explicit-fields (explicit-field-tables fields)]
+    (remove #(and (tables-with-explicit-fields (:table (:entity %))) (= "*" (name (:name %))))
+            fields)))
+
+(defn normalize-fields [fields]
+  (remove-extra-star-fields
+   (map normalize-field-table fields)))
+
 (extend-protocol Sqlable
   Entity
   (as-sql [entity]
@@ -457,7 +478,7 @@
     (with-entity-context clause
       (str
        (if (.fields clause)
-         (str/join ", " (map as-sql (.fields clause)))
+         (str/join ", " (distinct (map as-sql (normalize-fields (.fields clause)))))
          (as-sql '*))
        " FROM")))
   WhereClause
