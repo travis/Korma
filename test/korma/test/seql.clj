@@ -223,7 +223,6 @@
          (as-sql (SELECT users (FIELDS :testField :t!))))))
 
 (deftest sqlfns
-
   (is (= "SELECT NOW() AS \"now\", MAX(\"users\".\"blah\"), AVG(SUM(?, ?), SUM(?, ?)) FROM \"users\" WHERE \"users\".\"time\" >= NOW()"
          (as-sql (SELECT users
                          (FIELDS [(NOW) :now] (MAX :blah) (AVG (SUM 3 4) (SUM 4 5)))

@@ -70,22 +70,28 @@
 (defn field [name & {:as options}]
   (map->Field (assoc options :name name)))
 
+(defn strings-to-field
+  ([entity-name field-name] (field field-name :entity {:table entity-name}))
+  ([field-name] (field field-name)))
+
+(defn- nameable-to-field [nameable entity]
+  (let [field (apply strings-to-field (split-on-dots nameable))]
+    (if entity (assoc field :entity entity) field)))
+
 (defprotocol ToField
   (to-field [object entity]))
 
 (extend-protocol ToField
   clojure.lang.PersistentVector
-  (to-field [[name alias] entity] (field name :alias alias :entity entity))
+  (to-field [[name alias] entity] (assoc (to-field name entity) :alias alias))
   clojure.lang.Keyword
-  (to-field [kw entity] (field kw :entity entity))
+  (to-field [kw entity] (assoc (nameable-to-field kw entity) :delimit true))
   clojure.lang.Symbol
-  (to-field [sym entity] (field sym :entity entity))
+  (to-field [sym entity] (assoc (nameable-to-field sym entity) :delimit false))
   Field
   (to-field [field entity] (assoc field :entity entity))
   SqlFunction
   (to-field [function entity] function))
-
-
 
 (defn merge-fields [existing-clause new-clause]
   (concat (:fields existing-clause)
@@ -150,7 +156,7 @@
   Clause
   (add-to-query [clause query]
     (let [aggregated-query (add-to-query
-                            (->FieldsClause [(field aggregator :alias alias)])
+                            (->FieldsClause [(assoc aggregator :alias alias)])
                             query)]
       (if group
         (add-to-query (->GroupClause [group]) aggregated-query)
@@ -428,6 +434,9 @@
        ~@body)
      (do ~@body)))
 
+(defn alias-as-sql [alias]
+  (when alias (str " AS "(delimit (name alias)))))
+
 (extend-protocol Sqlable
   Entity
   (as-sql [entity]
@@ -518,19 +527,22 @@
   (as-sql [predicate]
     (str "NOT "(as-sql predicate)))
   SqlFunction
-  (as-sql [function] (str (.name function)"("(str/join ", " (map as-sql (.fields function)))")"))
+  (as-sql [function]
+    (str (.name function)"("(str/join ", " (map as-sql (.fields function)))")"
+         (alias-as-sql (:alias function))))
   Field
   (as-sql [field]
     (with-entity-context field
-     (str (as-sql (.name field)) (when (.alias field) (str " AS "(delimit (name (.alias field))))))))
+      (let [field-name (.name field)
+            sql-field-name (if (:delimit field) (delimit field-name) field-name)
+            sql-table (when *table* (str (delimit (name *table*)) "."))]
+        (str sql-table sql-field-name (alias-as-sql (.alias field))))))
   clojure.lang.PersistentVector
   (as-sql [vector] (str "("(str/join ", " (map as-sql vector))")"))
   clojure.lang.Keyword
-  (as-sql [keyword] (apply qualify-field
-                           (let [parts (split-on-dots keyword)]
-                             (concat (butlast parts) [(delimit (last parts))]))))
+  (as-sql [kw] (as-sql (to-field kw nil)))
   clojure.lang.Symbol
-  (as-sql [symbol] (apply qualify-field (split-on-dots symbol)))
+  (as-sql [sym] (as-sql (to-field sym nil)))
   java.lang.Number
   (as-sql [number] "?")
   java.lang.String
