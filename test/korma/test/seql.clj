@@ -240,12 +240,12 @@
                (FIELDS '*)
                (WITH address (FIELDS :id)))
 
-       ;; "SELECT \"users\".*, \"address\".*, \"state\".* FROM \"users\" LEFT JOIN \"address\" ON \"users\".\"id\" = \"address\".\"users_id\" LEFT JOIN \"state\" ON \"state\".\"id\" = \"address\".\"state_id\" WHERE (\"state\".\"state\" = ?) AND (\"address\".\"id\" > ?)"
-       ;; (select user2
-       ;;         (fields :*)
-       ;;         (with address
-       ;;           (with state (where {:state "nc"}))
-       ;;           (where {:id [> 5]})))
+       "SELECT \"users\".*, \"address\".*, \"state\".* FROM \"users\" INNER JOIN \"address\" ON \"users\".\"id\" = \"address\".\"users_id\" INNER JOIN \"state\" ON \"state\".\"id\" = \"address\".\"state_id\" WHERE (\"state\".\"state\" = ? AND \"address\".\"id\" > ?)"
+       (SELECT user2
+               (FIELDS '*)
+               (WITH address
+                     (WITH state (WHERE :state "nc"))
+                     (WHERE :id ['> 5])))
 
        ;; ;;Ensure that params are still ordered correctly
        ;; ["nc" 5]

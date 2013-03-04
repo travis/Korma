@@ -109,13 +109,16 @@
         (->Query (assoc components :fields (FieldsClause. (merge-fields existing-clause clause))))
         (->Query (assoc components :fields clause))))))
 
+(defn assoc-entity [new old]
+  (assoc new :entity (:entity old)))
+
 (defrecord WhereClause [predicate]
   Clause
   (add-to-query [where query]
     (let [components (.components query)]
       (if-let [existing-where (:where components)]
-        (->Query (assoc components :where (WhereClause. (->AndPredicate [(.predicate existing-where)
-                                                                         (.predicate where)]))))
+        (->Query (assoc components :where (WhereClause. (->AndPredicate [(assoc-entity (.predicate existing-where) existing-where)
+                                                                         (assoc-entity (.predicate where) where)]))))
         (->Query (assoc components :where where))))))
 
 (defrecord HavingClause [predicate]
@@ -123,8 +126,8 @@
   (add-to-query [having query]
     (let [components (.components query)]
       (if-let [existing-having (:having components)]
-        (->Query (assoc components :having (HavingClause. (->AndPredicate [(.predicate existing-having)
-                                                                         (.predicate having)]))))
+        (->Query (assoc components :having (HavingClause. (->AndPredicate [(assoc-entity (.predicate existing-having) existing-having)
+                                                                           (assoc-entity (.predicate having) having)]))))
         (->Query (assoc components :having having))))))
 
 (defrecord OrderClause [fields direction]
@@ -193,22 +196,30 @@
 (defn add-all-to-query [clauses query]
   (reduce (fn [q c] (add-to-query c q)) query clauses))
 
+(defn rel-to-join [rel primary-entity foreign-entity]
+  (prn rel)
+  (merge
+   {:type :inner :entity foreign-entity}
+   (case (:rel-type rel)
+     :has-one {:primary-key (field (:pk rel) :entity primary-entity)
+               :foreign-key (field (:fk rel) :entity foreign-entity)}
+     :belongs-to {:primary-key (field (:pk rel) :entity foreign-entity)
+                  :foreign-key (field (:fk rel) :entity primary-entity)})))
+
 (defrecord WithClause [with-entity clauses]
   Clause
   (add-to-query [clause query]
     (let [components (.components query)]
-     (if-let [entity (:entity components)]
-       (if-let [rel (get (:rel entity) (:table with-entity))]
-         (add-all-to-query
-          (concat
-           [(->JoinsClause [{:type :inner :entity with-entity
-                             :primary-key (qualify-key entity (:pk @rel))
-                             :foreign-key (qualify-key with-entity (:fk @rel))}])
-            (->FieldsClause [(field "*" :entity with-entity)])]
-           (map #(assoc % :entity with-entity) clauses))
-          query)
-         (throw (Exception. (str "No relationship defined between "(:table entity)" and "(:table with-entity)))))
-       (throw (Exception. "Can not use WITH without an Entity"))))))
+      (if-let [entity (or (:entity clause) (:entity components))]
+        (if-let [rel (get (:rel entity) (:table with-entity))]
+          (add-all-to-query
+           (concat
+            [(->JoinsClause [(rel-to-join @rel entity with-entity)])
+             (->FieldsClause [(field "*" :entity with-entity :delimit false)])]
+            (map #(assoc % :entity with-entity) clauses))
+           query)
+          (throw (Exception. (str "No relationship defined between "(:table entity)" and "(:table with-entity)))))
+        (throw (Exception. "Can not use WITH without an Entity"))))))
 
 (defrecord SetClause [fields]
   Clause
@@ -543,22 +554,28 @@
     (str "("(str/join " OR " (map as-sql (.predicates or-predicate)))")"))
   SimplePredicate
   (as-sql [predicate]
-    (str (as-sql (.field predicate))" "(name (.operator predicate))" "(as-sql (.value predicate))))
+    (with-entity-context predicate
+     (str (as-sql (.field predicate))" "(name (.operator predicate))" "(as-sql (.value predicate)))))
   IsPredicate
   (as-sql [predicate]
-    (str (as-sql (.field predicate))" IS "(as-sql (.value predicate))))
+    (with-entity-context predicate
+     (str (as-sql (.field predicate))" IS "(as-sql (.value predicate)))))
   IsNotPredicate
   (as-sql [predicate]
-    (str (as-sql (.field predicate))" IS NOT "(as-sql (.value predicate))))
+    (with-entity-context predicate
+     (str (as-sql (.field predicate))" IS NOT "(as-sql (.value predicate)))))
   InPredicate
   (as-sql [predicate]
-    (str (as-sql (.field predicate))" IN "(as-sql (.list predicate))))
+    (with-entity-context predicate
+     (str (as-sql (.field predicate))" IN "(as-sql (.list predicate)))))
   BetweenPredicate
   (as-sql [predicate]
-    (str (as-sql (.field predicate))" BETWEEN "(as-sql (.min predicate))" AND "(as-sql (.max predicate))))
+    (with-entity-context predicate
+     (str (as-sql (.field predicate))" BETWEEN "(as-sql (.min predicate))" AND "(as-sql (.max predicate)))))
   LikePredicate
   (as-sql [predicate]
-    (str (as-sql (.field predicate))" LIKE "(as-sql (.like predicate))))
+    (with-entity-context predicate
+     (str (as-sql (.field predicate))" LIKE "(as-sql (.like predicate)))))
   NotPredicate
   (as-sql [predicate]
     (str "NOT "(as-sql predicate)))
