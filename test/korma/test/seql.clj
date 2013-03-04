@@ -42,49 +42,62 @@
     (is (= "`hams`.`there`"(binding [*table* :users *delimiters* ["`" "`"]] (as-sql :hams.there)))))
 
   (testing "vectors are turned into sql lists"
-    (is (= "(?, ?, ?)" (as-sql ["hi", "bye", 1]))))
-
-  )
+    (is (= "(?, ?, ?)" (as-sql ["hi", "bye", 1])))))
 
 (deftest where-function
-  (is (= "SELECT \"users\".* FROM \"users\" WHERE \"users\".\"username\" = ?"
-         (as-sql
-          (SELECT "users"
-                  (WHERE :username "chris")))))
-  (is (= "SELECT \"users\".* FROM \"users\" WHERE (\"users\".\"username\" = ? AND \"users\".\"email\" = ?)"
-         (as-sql
-          (SELECT "users"
-                  (WHERE :username "chris")
-                  (WHERE :email "chris@example.com"))))))
+  (are [result params query] (and (= result (as-sql query)) (= params (as-params query)))
+        "SELECT \"users\".* FROM \"users\" WHERE \"users\".\"username\" = ?"
+        ["chris"]
+        (SELECT "users"
+                (WHERE :username "chris"))
+
+        "SELECT \"users\".* FROM \"users\" WHERE (\"users\".\"username\" = ? AND \"users\".\"email\" = ?)"
+
+        ["chris" "chris@example.com"]
+        (SELECT "users"
+                (WHERE :username "chris")
+                (WHERE :email "chris@example.com"))))
 
 (deftest select-function
-  (is (= "SELECT \"users\".\"id\", \"users\".\"username\" FROM \"users\" WHERE \"users\".\"username\" = ? ORDER BY \"users\".\"created\" ASC LIMIT 5 OFFSET 3"
-         (as-sql
-          (SELECT "users"
-                  (FIELDS :id :username)
-                  (WHERE :username "chris")
-                  (ORDER :created)
-                  (LIMIT 5)
-                  (OFFSET 3))))))
+  (are [result params query] (and (= result (as-sql query)) (= params (as-params query)))
+       "SELECT \"users\".\"id\", \"users\".\"username\" FROM \"users\" WHERE \"users\".\"username\" = ? ORDER BY \"users\".\"created\" ASC LIMIT 5 OFFSET 3"
+       ["chris"]
+       (SELECT "users"
+               (FIELDS :id :username)
+               (WHERE :username "chris")
+               (ORDER :created)
+               (LIMIT 5)
+               (OFFSET 3))))
 
 (deftest simple-selects
-  (are [result query] (= result (as-sql query))
+  (are [result params query] (and (= result (as-sql query)) (= params (as-params query)))
        "SELECT \"users\".* FROM \"users\""
+       []
        (SELECT users)
+
        "SELECT \"u\".* FROM \"users\" \"u\""
+       []
        (SELECT users-alias)
+
        "SELECT \"users\".\"id\", \"users\".\"username\" FROM \"users\""
+       []
        (SELECT users
                (FIELDS :id :username))
+
        "SELECT \"users\".* FROM \"users\" WHERE (\"users\".\"username\" = ? AND \"users\".\"email\" = ?)"
+       ["chris" "hey@hey.com"]
        (SELECT users
                (WHERE :username "chris"
                       :email "hey@hey.com"))
+
        "SELECT \"users\".* FROM \"users\" WHERE \"users\".\"username\" = ? ORDER BY \"users\".\"created\" ASC"
+       ["chris"]
        (SELECT users
                (WHERE :username "chris")
                (ORDER :created))
+
        "SELECT \"users\".* FROM \"users\" WHERE \"users\".\"active\" = TRUE ORDER BY \"users\".\"created\" ASC LIMIT 5 OFFSET 3"
+       []
        (SELECT users
                (WHERE :active true)
                (ORDER :created)
@@ -98,15 +111,20 @@
                               :last "granger")
                          (WHERE :id 3))))))
 (deftest update-queries
-  (are [result query] (= result (as-sql query))
+  (are [result params query] (and (= result (as-sql query)) (= params (as-params query)))
        "UPDATE \"users\" SET \"first\" = ?"
+       ["chris"]
        (UPDATE users
                (SET :first "chris"))
+
        "UPDATE \"users\" SET \"first\" = ? WHERE \"users\".\"id\" = ?"
+       ["chris" 3]
        (UPDATE users
                (SET :first "chris")
                (WHERE :id 3))
+
        "UPDATE \"users\" SET \"first\" = ?, \"last\" = ? WHERE \"users\".\"id\" = ?"
+       ["chris" "granger" 3]
        (UPDATE users
                (SET :first "chris"
                     :last "granger")
@@ -118,10 +136,13 @@
                          (WHERE :id 3))))))
 
 (deftest delete-queries
-  (are [result query] (= result (as-sql query))
+  (are [result params query] (and (= result (as-sql query)) (= params (as-params query)))
        "DELETE FROM \"users\""
+       []
        (DELETE users)
+
        "DELETE FROM \"users\" WHERE \"users\".\"id\" = ?"
+       [3]
        (DELETE users
                (WHERE :id 3))))
 
@@ -133,55 +154,69 @@
   (testing "WHEN values is empty THEN generates a NOOP SQL statement"
     (is (= "DO 0"
            (as-sql (INSERT "users"
-                           (VALUES {})))))))
+                           (VALUES {})))))
+    (is (= [] (as-params (INSERT "users"
+                                 (VALUES {})))))))
 
 
 (deftest insert-queries
-  (are [result query] (= result (as-sql query))
+  (are [result params query] (and (= result (as-sql query)) (= params (as-params query)))
        "INSERT INTO \"users\" (\"last\", \"first\") VALUES (?, ?)"
+       ["granger" "chris"]
        (INSERT users
                (VALUES {:first "chris" :last "granger"}))
+
        "INSERT INTO \"users\" (\"last\", \"first\") VALUES (?, ?), (?, ?)"
+       ["granger" "chris" "jordan" "michael"]
        (INSERT users
                (VALUES {:first "chris" :last "granger"}
                        {:last "jordan" :first "michael"}))
+
        "DO 0"
+       []
        (INSERT users (VALUES {}))
+
        "DO 0"
+       []
        (INSERT users (VALUES {} {}))))
 
 (deftest complex-where
-  (are [query result] (= (as-sql query) result)
+  (are [result params query] (and (= result (as-sql query)) (= params (as-params query)))
+       "SELECT \"users\".* FROM \"users\" WHERE (\"users\".\"name\" = ? OR \"users\".\"name\" = ?)"
+       ["chris" "john"]
        (SELECT users
                (WHERE (OR {:name "chris"}
                           {:name "john"})))
-       "SELECT \"users\".* FROM \"users\" WHERE (\"users\".\"name\" = ? OR \"users\".\"name\" = ?)"
 
+       "SELECT \"users\".* FROM \"users\" WHERE ((\"users\".\"last\" = ? AND \"users\".\"name\" = ?) OR \"users\".\"email\" = ? OR \"users\".\"age\" > ?)"
+       ["dreward" "drew" "drew@drew.com" 10]
        (SELECT users
                (WHERE (OR {:name "drew"
                            :last "dreward"}
                           {:email "drew@drew.com"}
                           {:age [:> 10]})))
-       "SELECT \"users\".* FROM \"users\" WHERE ((\"users\".\"last\" = ? AND \"users\".\"name\" = ?) OR \"users\".\"email\" = ? OR \"users\".\"age\" > ?)"
-
+       "SELECT \"users\".* FROM \"users\" WHERE (\"users\".\"x\" < ? OR (\"users\".\"y\" < ? OR \"users\".\"z\" > ?))"
+       [5 3 4]
        (SELECT users
                (WHERE (OR {:x [:< 5]}
                           (OR {:y [:< 3]}
                               {:z [:> 4]}))))
-       "SELECT \"users\".* FROM \"users\" WHERE (\"users\".\"x\" < ? OR (\"users\".\"y\" < ? OR \"users\".\"z\" > ?))"
 
+       "SELECT \"users\".* FROM \"users\" WHERE \"users\".\"name\" LIKE ?"
+       ["chris"]
        (SELECT users
                (WHERE :name [:like "chris"]))
-       "SELECT \"users\".* FROM \"users\" WHERE \"users\".\"name\" LIKE ?"
 
+       "SELECT \"users\".* FROM \"users\" WHERE \"users\".\"name\" IN (?, ?)"
+       ["travis" "chris"]
        (SELECT users
                (WHERE :name ["travis" "chris"]))
-       "SELECT \"users\".* FROM \"users\" WHERE \"users\".\"name\" IN (?, ?)"
 
+       "SELECT \"users\".* FROM \"users\" WHERE (\"users\".\"name\" LIKE ? OR \"users\".\"name\" LIKE ?)"
+       ["chris" "john"]
        (SELECT users
                (WHERE (OR {:name [:like "chris"]}
-                          (LIKE :name "john"))))
-       "SELECT \"users\".* FROM \"users\" WHERE (\"users\".\"name\" LIKE ? OR \"users\".\"name\" LIKE ?)"))
+                          (LIKE :name "john"))))))
 
 ;; (deftest with-many
 ;;   (with-out-str
@@ -207,12 +242,17 @@
                (JOIN :user3 :users.id :user3.users_id))))
 
 (deftest aggregate-group
-  (are [result query] (= result (as-sql query))
+  (are [result params query] (and (= result (as-sql query)) (= params (as-params query)))
        "SELECT \"users\".* FROM \"users\" GROUP BY \"users\".\"id\", \"users\".\"name\""
+       []
        (SELECT users (GROUP :id :name))
+
        "SELECT COUNT(\"users\".*) AS \"cnt\" FROM \"users\" GROUP BY \"users\".\"id\""
+       []
        (SELECT users (AGGREGATE (COUNT '*) :cnt :id))
+
        "SELECT COUNT(\"users\".*) AS \"cnt\" FROM \"users\" GROUP BY \"users\".\"id\" HAVING \"users\".\"id\" = ?"
+       [5]
        (SELECT users
                (AGGREGATE (COUNT '*) :cnt :id)
                (HAVING :id 5))))
@@ -222,10 +262,12 @@
          (as-sql (SELECT users (FIELDS :testField :t!))))))
 
 (deftest sqlfns
-  (is (= "SELECT NOW() AS \"now\", MAX(\"users\".\"blah\"), AVG(SUM(?, ?), SUM(?, ?)) FROM \"users\" WHERE \"users\".\"time\" >= NOW()"
-         (as-sql (SELECT users
-                         (FIELDS [(NOW) :now] (MAX :blah) (AVG (SUM 3 4) (SUM 4 5)))
-                         (WHERE :time [:>= (NOW)]))))))
+  (are [result params query] (and (= result (as-sql query)) (= params (as-params query)))
+       "SELECT NOW() AS \"now\", MAX(\"users\".\"blah\"), AVG(SUM(?, ?), SUM(?, ?)) FROM \"users\" WHERE \"users\".\"time\" >= NOW()"
+       [3 4 4 5]
+       (SELECT users
+               (FIELDS [(NOW) :now] (MAX :blah) (AVG (SUM 3 4) (SUM 4 5)))
+               (WHERE :time [:>= (NOW)]))))
 
 (deftest join-ent-directly
   (is (= "SELECT \"users\".* FROM \"users\" INNER JOIN \"address\" ON \"users\".\"id\" = \"address\".\"users_id\""
@@ -233,29 +275,21 @@
                          (JOIN address))))))
 
 (deftest new-with
-  (are [result query] (= result (as-sql query))
+  (are [result params query] (and (= result (as-sql query)) (= params (as-params query)))
 
        "SELECT \"users\".*, \"address\".\"id\" FROM \"users\" INNER JOIN \"address\" ON \"users\".\"id\" = \"address\".\"users_id\""
+       []
        (SELECT user2
                (FIELDS '*)
                (WITH address (FIELDS :id)))
 
        "SELECT \"users\".*, \"address\".*, \"state\".* FROM \"users\" INNER JOIN \"address\" ON \"users\".\"id\" = \"address\".\"users_id\" INNER JOIN \"state\" ON \"state\".\"id\" = \"address\".\"state_id\" WHERE (\"state\".\"state\" = ? AND \"address\".\"id\" > ?)"
+       ["nc" 5]
        (SELECT user2
                (FIELDS '*)
                (WITH address
                      (WITH state (WHERE :state "nc"))
                      (WHERE :id ['> 5])))
-
-       ;; ;;Ensure that params are still ordered correctly
-       ;; ["nc" 5]
-       ;; (query-only
-       ;;   (:params
-       ;;     (select user2
-       ;;             (fields :*)
-       ;;             (with address
-       ;;               (with state (where {:state "nc"}))
-       ;;               (where (> :id 5))))))
 
        ;; ;;Validate has-many executes the second query
        ;; "dry run :: SELECT \"users\".* FROM \"users\" :: []\ndry run :: SELECT \"email\".* FROM \"email\" WHERE \"email\".\"email\" LIKE ? AND (\"email\".\"users_id\" = ?) :: [%@gmail.com 1]\n"

@@ -415,7 +415,8 @@
 
 
 (defprotocol Sqlable
-  (as-sql [sqlable]))
+  (as-sql [sqlable])
+  (as-params [sqlable]))
 
 (def ^:dynamic *delimiters* ["\"" "\""])
 (def ^:dynamic *table* nil)
@@ -440,6 +441,9 @@
             (remove nil?
                     (map #(if-let [component (components %)] (as-sql component) nil)
                          clause-names))))
+
+(defn clauses-to-params [components clause-names]
+  (apply concat (map #(as-params (components %)) clause-names)))
 
 (def query-names {:select "SELECT" :update "UPDATE" :delete "DELETE FROM" :insert "INSERT INTO"})
 
@@ -487,17 +491,24 @@
   Entity
   (as-sql [entity]
     (str/join " " (map delimit (remove nil? [(:table entity) (:alias entity)]))))
+  (as-params [_] [])
   Query
   (as-sql [query]
-    (if-let [special (special-case-sql (or (.components query) {}))]
-      special
-      (let [components (.components query)
-            fields (:fields components)]
-        (with-entity-context components
-          (str (query-names (:type components))" "
-               (clauses-to-sql
-                components
-                (query-components (:type components))))))))
+    (let [components (or (.components query) {})]
+     (if-let [special (special-case-sql components)]
+       special
+       (with-entity-context components
+         (str (query-names (:type components))" "
+              (clauses-to-sql
+               components
+               (query-components (:type components))))))))
+  (as-params [query]
+    (let [components (or (.components query) {})]
+     (if-let [special (special-case-sql components)]
+       []
+       (clauses-to-params
+        components
+        (query-components (:type components))))))
   FieldsClause
   (as-sql [clause]
     (with-entity-context clause
@@ -506,28 +517,35 @@
          (str/join ", " (distinct (map as-sql (normalize-fields (.fields clause)))))
          (as-sql '*))
        " FROM")))
+  (as-params [clause] (apply concat (map as-params (.fields clause))))
   WhereClause
   (as-sql [clause]
     (with-entity-context clause
      (str "WHERE "(as-sql (.predicate clause)))))
+  (as-params [clause] (as-params (.predicate clause)))
   HavingClause
   (as-sql [clause]
     (with-entity-context clause
      (str "HAVING "(as-sql (.predicate clause)))))
+  (as-params [clause] (as-params (.predicate clause)))
   OrderClause
   (as-sql [clause]
     (with-entity-context clause
      (str "ORDER BY "(str/join ", " (map as-sql (.fields clause)))" "(to-order (.direction clause)))))
+  (as-params [_] [])
   LimitClause
   (as-sql [clause]
     (str "LIMIT "(.limit clause)))
+  (as-params [_] [])
   OffsetClause
   (as-sql [clause]
     (str "OFFSET "(.offset clause)))
+  (as-params [_] [])
   GroupClause
   (as-sql [clause]
     (with-entity-context clause
      (str "GROUP BY "(str/join ", " (map as-sql (.fields clause))))))
+  (as-params [_] [])
   JoinsClause
   (as-sql [clause]
     (with-entity-context clause
@@ -535,9 +553,13 @@
                (map
                 (fn [join] (str (join-names (:type join))" "(as-sql (:entity join))" ON "(as-sql (:primary-key join))" = "(as-sql (:foreign-key join))))
                 (.joins clause)))))
+  (as-params [_] [])
   SetClause
   (as-sql [clause]
     (str "SET "(str/join ", " (map (fn [[field value]] (str (delimit (name field))" = "(as-sql value))) (.fields clause)))))
+  (as-params [clause]
+    (apply concat (map as-params (map second (.fields clause)))))
+
   ValuesClause
   (as-sql [clause]
     (let [entities (.entities clause)
@@ -545,43 +567,54 @@
       (str "("(str/join ", " (map delimit (map name fields)))") VALUES "
            (str/join ", " (map (fn [entity] (str "("(str/join ", " (map as-sql (map entity fields)))")"))
                                entities)))))
+  (as-params [clause] (apply concat (map as-params (apply concat (map vals (.entities clause))))))
   AndPredicate
   (as-sql [and-predicate]
     (str "("(str/join " AND " (map as-sql (.predicates and-predicate)))")"))
+  (as-params [predicate] (apply concat (map as-params (.predicates predicate))))
   OrPredicate
   (as-sql [or-predicate]
     (str "("(str/join " OR " (map as-sql (.predicates or-predicate)))")"))
+  (as-params [predicate] (apply concat (map as-params (.predicates predicate))))
   SimplePredicate
   (as-sql [predicate]
     (with-entity-context predicate
      (str (as-sql (.field predicate))" "(name (.operator predicate))" "(as-sql (.value predicate)))))
+  (as-params [predicate] (as-params (.value predicate)))
   IsPredicate
   (as-sql [predicate]
     (with-entity-context predicate
      (str (as-sql (.field predicate))" IS "(as-sql (.value predicate)))))
+  (as-params [_] [])
   IsNotPredicate
   (as-sql [predicate]
     (with-entity-context predicate
      (str (as-sql (.field predicate))" IS NOT "(as-sql (.value predicate)))))
+  (as-params [_] [])
   InPredicate
   (as-sql [predicate]
     (with-entity-context predicate
      (str (as-sql (.field predicate))" IN "(as-sql (.list predicate)))))
+  (as-params [predicate] (apply concat (map as-params (.list predicate))))
   BetweenPredicate
   (as-sql [predicate]
     (with-entity-context predicate
      (str (as-sql (.field predicate))" BETWEEN "(as-sql (.min predicate))" AND "(as-sql (.max predicate)))))
+  (as-params [predicate] (concat (as-params (.min predicate)) (as-params (.max predicate))))
   LikePredicate
   (as-sql [predicate]
     (with-entity-context predicate
      (str (as-sql (.field predicate))" LIKE "(as-sql (.like predicate)))))
+  (as-params [predicate] (as-params (.like predicate)))
   NotPredicate
   (as-sql [predicate]
     (str "NOT "(as-sql predicate)))
+  (as-params [predicate] (as-params predicate))
   SqlFunction
   (as-sql [function]
     (str (.name function)"("(str/join ", " (map as-sql (.fields function)))")"
          (alias-as-sql (:alias function))))
+  (as-params [function] (apply concat (map as-params (.fields function))))
   Field
   (as-sql [field]
     (with-entity-context field
@@ -589,17 +622,25 @@
             sql-field-name (if (:delimit field) (delimit field-name) field-name)
             sql-table (when (and (:qualify field) *table*) (str (delimit (name *table*)) "."))]
         (str sql-table sql-field-name (alias-as-sql (.alias field))))))
+  (as-params [function] [])
   clojure.lang.PersistentVector
   (as-sql [vector] (str "("(str/join ", " (map as-sql vector))")"))
+  (as-params [vector] (apply concat (map as-params vector)))
   clojure.lang.Keyword
   (as-sql [kw] (as-sql (to-field kw nil)))
+  (as-params [_] [])
   clojure.lang.Symbol
   (as-sql [sym] (as-sql (to-field sym nil)))
+  (as-params [_] [])
   java.lang.Number
   (as-sql [number] "?")
+  (as-params [number] [number])
   java.lang.String
   (as-sql [string] "?")
+  (as-params [string] [string])
   java.lang.Boolean
   (as-sql [bool] (if bool "TRUE" "FALSE"))
+  (as-params [_] [])
   nil
-  (as-sql [bool] "NULL"))
+  (as-sql [_] "NULL")
+  (as-params [_] []))
