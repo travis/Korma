@@ -68,7 +68,7 @@
 (defrecord Field [name alias entity])
 
 (defn field [name & {:as options}]
-  (map->Field (merge {:delimit true} (assoc options :name name))))
+  (map->Field (merge {:delimit true :qualify true} (assoc options :name name))))
 
 (defn strings-to-field
   ([entity-name field-name] (field field-name :entity {:table entity-name}))
@@ -90,7 +90,7 @@
   clojure.lang.Keyword
   (to-field [kw entity] (assoc (nameable-to-field kw entity) :delimit true))
   clojure.lang.Symbol
-  (to-field [sym entity] (assoc (nameable-to-field sym entity) :delimit false))
+  (to-field [sym entity] (assoc (nameable-to-field sym entity) :delimit false :qualify (= sym '*)))
   Field
   (to-field [field entity] (assoc field :entity entity))
   SqlFunction
@@ -197,7 +197,6 @@
   (reduce (fn [q c] (add-to-query c q)) query clauses))
 
 (defn rel-to-join [rel primary-entity foreign-entity]
-  (prn rel)
   (merge
    {:type :inner :entity foreign-entity}
    (case (:rel-type rel)
@@ -588,7 +587,7 @@
     (with-entity-context field
       (let [field-name (name (.name field))
             sql-field-name (if (:delimit field) (delimit field-name) field-name)
-            sql-table (when *table* (str (delimit (name *table*)) "."))]
+            sql-table (when (and (:qualify field) *table*) (str (delimit (name *table*)) "."))]
         (str sql-table sql-field-name (alias-as-sql (.alias field))))))
   clojure.lang.PersistentVector
   (as-sql [vector] (str "("(str/join ", " (map as-sql vector))")"))

@@ -295,10 +295,9 @@
 ;;          "UPDATE \"users\" SET \"blah\" = TRUE"
 ;;          (update user2 (set-fields {:blah true})))))
 
-;; (deftest raws
-;;   (sql-only
-;;     (is "SELECT \"users\".* FROM \"users\" WHERE ROWNUM >= ?"
-;;         (= (select user2 (where {(raw "ROWNUM") [>= 5]}))))))
+(deftest raws
+  (is (= "SELECT \"users\".* FROM \"users\" WHERE ROWNUM >= ?"
+         (as-sql (SELECT user2 (WHERE 'ROWNUM ['>= 5]))))))
 
 ;; (deftest pk-dry-run
 ;;   (let [result (with-out-str
