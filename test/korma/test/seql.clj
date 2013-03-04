@@ -206,7 +206,6 @@
                (JOIN :user2 :users.id :user2.users_id)
                (JOIN :user3 :users.id :user3.users_id))))
 
-
 (deftest aggregate-group
   (are [result query] (= result (as-sql query))
        "SELECT \"users\".* FROM \"users\" GROUP BY \"users\".\"id\", \"users\".\"name\""
@@ -228,7 +227,7 @@
                          (FIELDS [(NOW) :now] (MAX :blah) (AVG (SUM 3 4) (SUM 4 5)))
                          (WHERE :time [:>= (NOW)]))))))
 
-#_(deftest join-ent-directly
+(deftest join-ent-directly
   (is (= "SELECT \"users\".* FROM \"users\" INNER JOIN \"address\" ON \"users\".\"id\" = \"address\".\"users_id\""
          (as-sql (SELECT user2
                          (JOIN address))))))

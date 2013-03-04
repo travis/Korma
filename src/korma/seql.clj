@@ -68,7 +68,7 @@
 (defrecord Field [name alias entity])
 
 (defn field [name & {:as options}]
-  (map->Field (assoc options :name name)))
+  (map->Field (merge {:delimit true} (assoc options :name name))))
 
 (defn strings-to-field
   ([entity-name field-name] (field field-name :entity {:table entity-name}))
@@ -165,13 +165,27 @@
         (add-to-query (->GroupClause [group]) aggregated-query)
         aggregated-query))))
 
+(defn primary-key [entity]
+  (field (or (:pk entity) :id) :entity entity))
+
+(defn foreign-key [primary-entity entity]
+  (field (str (name (:table primary-entity)) "_id") :entity entity))
+
+(defn complete-join [join primary-entity]
+  (merge {:type :inner
+          :primary-key (primary-key primary-entity)
+          :foreign-key (foreign-key primary-entity (:entity join))} join))
+
 (defrecord JoinsClause [joins]
   Clause
   (add-to-query [clause query]
-    (let [components (.components query)]
+    (let [components (.components query)
+          completed-joins (map #(complete-join % (or (:entity clause) (:entity components)))
+                               (.joins clause))]
       (if-let [existing-clause (:joins components)]
-        (->Query (assoc components :joins (JoinsClause. (concat (.joins existing-clause) (.joins clause)))))
-        (->Query (assoc components :joins clause))))))
+        (->Query (assoc components :joins (JoinsClause. (concat (.joins existing-clause)
+                                                                completed-joins))))
+        (->Query (assoc components :joins (JoinsClause. completed-joins)))))))
 
 (defn qualify-key [entity key]
   (keyword (str (name (or (:alias entity) (:table entity)))"."(name key))))
@@ -188,8 +202,8 @@
          (add-all-to-query
           (concat
            [(->JoinsClause [{:type :inner :entity with-entity
-                             :field-a (qualify-key entity (:pk @rel))
-                             :field-b (qualify-key with-entity (:fk @rel))}])
+                             :primary-key (qualify-key entity (:pk @rel))
+                             :foreign-key (qualify-key with-entity (:fk @rel))}])
             (->FieldsClause [(field "*" :entity with-entity)])]
            (map #(assoc % :entity with-entity) clauses))
           query)
@@ -367,9 +381,10 @@
   (->AggregateClause function alias group-by))
 
 (defn JOIN
-  ([entity] (WITH entity))
-  ([entity field-a field-b]
-     (->JoinsClause [{:type :inner :entity (to-entity entity) :field-a field-a :field-b field-b}])))
+  ([entity] (->JoinsClause [{:type :inner :entity (to-entity entity)}]))
+  ([entity primary-key foreign-key]
+     (->JoinsClause [{:type :inner :entity (to-entity entity)
+                      :primary-key primary-key :foreign-key foreign-key}])))
 
 (defn SET [& fields]
   (->SetClause (partition 2 fields)))
@@ -508,7 +523,7 @@
     (with-entity-context clause
      (str/join " "
                (map
-                (fn [join] (str (join-names (:type join))" "(as-sql (:entity join))" ON "(as-sql (:field-a join))" = "(as-sql (:field-b join))))
+                (fn [join] (str (join-names (:type join))" "(as-sql (:entity join))" ON "(as-sql (:primary-key join))" = "(as-sql (:foreign-key join))))
                 (.joins clause)))))
   SetClause
   (as-sql [clause]
@@ -554,7 +569,7 @@
   Field
   (as-sql [field]
     (with-entity-context field
-      (let [field-name (.name field)
+      (let [field-name (name (.name field))
             sql-field-name (if (:delimit field) (delimit field-name) field-name)
             sql-table (when *table* (str (delimit (name *table*)) "."))]
         (str sql-table sql-field-name (alias-as-sql (.alias field))))))
